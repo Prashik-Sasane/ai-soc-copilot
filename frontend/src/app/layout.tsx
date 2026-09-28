@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import Navigation from '@/components/Navigation';
+import AuthGuard from '@/components/AuthGuard';
+import LayoutContent from '@/components/LayoutContent';
 
 export const metadata: Metadata = {
   title: 'AI SOC Copilot - Security Operations Center',
@@ -15,12 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="bg-soc-bg text-soc-textMain antialiased min-h-screen">
-        <Navigation />
-        <main className="pt-20 pl-[270px] pr-6 pb-12 transition-all">
-          <div className="max-w-[1600px] mx-auto space-y-6">
-            {children}
-          </div>
-        </main>
+        <AuthGuard>
+          <LayoutContent>{children}</LayoutContent>
+        </AuthGuard>
       </body>
     </html>
   );

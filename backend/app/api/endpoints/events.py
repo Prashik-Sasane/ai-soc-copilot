@@ -38,6 +38,20 @@ async def ingest_file(
     return result
 
 
+@router.post("/simulate-scenario")
+def simulate_attack_scenario(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    res = generate_synthetic_attack_scenario(db=db, tenant_id=current_user.tenant_id)
+    return {
+        "status": "success",
+        "message": "Synthetic multi-stage attack scenario generated successfully.",
+        "scenario": "Phishing -> Encoded PowerShell -> LSASS Dump -> C2 Beaconing",
+        "details": res
+    }
+
+
 @router.post("/seed-demo")
 def seed_demo_scenario(
     db: Session = Depends(get_db),

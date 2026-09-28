@@ -3,16 +3,36 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, engine
 from app.core.init_db import init_db
 from app.core.logging import logger
 from app.api.endpoints import auth, dashboard, events, alerts, incidents, indicators, copilot, knowledge, mitre, feedback
 
 
+def _wait_for_db_ready(max_retries: int = 20, retry_delay: float = 2.0):
+    for attempt in range(1, max_retries + 1):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info(f"Database connection established on attempt {attempt}")
+            return True
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"FATAL: Could not connect to database after {max_retries} attempts: {e}")
+                raise
+            logger.warning(f"Database connection attempt {attempt}/{max_retries} failed: {e}. Retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+    return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Wait for DB socket to be ready (especially important in Docker Compose)
+    _wait_for_db_ready()
+
     # Initialize DB schema & default users on startup
     db = SessionLocal()
     try:
@@ -80,4 +100,16 @@ def health_check():
 
 @app.get("/readyz")
 def readiness_check():
-    return {"status": "ready", "database": "connected"}
+    ready = True
+    db_error = None
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        ready = False
+        db_error = str(e)
+    return {
+        "status": "ready" if ready else "degraded",
+        "database": "connected" if ready else "disconnected",
+        "database_error": db_error
+    }

@@ -197,7 +197,7 @@ export default function AlertsPage() {
                         Details
                       </button>
                       <Link
-                        href={`/copilot?query=${encodeURIComponent(`Analyze alert ${alert.id}: ${alert.title}`)}`}
+                        href={`/copilot?alert_id=${alert.id}&query=${encodeURIComponent(`Analyze alert: ${alert.title}`)}`}
                         className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-cyan-950/60 text-cyan-300 border border-cyan-800/40 hover:bg-cyan-900/60 transition-all text-xs"
                       >
                         <Bot className="w-3.5 h-3.5" />
@@ -271,7 +271,7 @@ export default function AlertsPage() {
                   Close
                 </button>
                 <Link
-                  href={`/copilot?query=${encodeURIComponent(`Investigate alert ${selectedAlert.title} on host ${selectedAlert.asset_id}`)}`}
+                  href={`/copilot?alert_id=${selectedAlert.id}&query=${encodeURIComponent(`Investigate alert ${selectedAlert.title} on host ${selectedAlert.asset_id}`)}`}
                   className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-xs font-medium"
                 >
                   <Bot className="w-4 h-4" />

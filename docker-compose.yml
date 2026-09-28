@@ -1,36 +1,39 @@
-version: '3.8'
-
 services:
   db:
     image: pgvector/pgvector:pg16
     container_name: ai_soc_postgres
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ai_soc_db
       POSTGRES_USER: ai_soc_user
-      POSTGRES_PASSWORD: ai_soc_password
+      POSTGRES_PASSWORD: 12410279
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ai_soc_user -d ai_soc_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 15
+      start_period: 15s
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: ai_soc_backend
-    restart: always
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://ai_soc_user:ai_soc_password@db:5432/ai_soc_db
-      - SECRET_KEY=production_secret_key_change_in_prod
+      # NOTE: postgresql+psycopg2:// explicitly uses psycopg2 (v2) driver which matches requirements.txt
+      # Also supports postgresql+psycopg:// if using psycopg v3 driver
+      - DATABASE_URL=postgresql+psycopg2://ai_soc_user:12410279@db:5432/ai_soc_db
+      - SECRET_KEY=production_secret_key_change_in_prod_min_32_bytes_long_abc123
       - ENVIRONMENT=production
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://frontend:3000
+      - API_V1_STR=/api/v1
     depends_on:
       db:
         condition: service_healthy
@@ -39,14 +42,20 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* must be baked at BUILD TIME - Next.js inlines them into client bundles
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
     container_name: ai_soc_frontend
-    restart: always
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
+      # Runtime env vars (server-side only; client side uses baked NEXT_PUBLIC_ above)
       - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      - NODE_ENV=production
     depends_on:
       - backend
 
 volumes:
   postgres_data:
+    driver: local

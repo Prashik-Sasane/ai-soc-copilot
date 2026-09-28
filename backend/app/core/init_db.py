@@ -19,7 +19,7 @@ def init_db(db: Session) -> None:
             hashed_password=get_password_hash("AdminSOC123!"),
             full_name="Lead SOC Admin",
             role=UserRole.ADMIN.value,
-            tenant_id="tenant_default"
+            tenant_id="tenant_admin_001"
         )
         db.add(admin_user)
 
@@ -33,7 +33,7 @@ def init_db(db: Session) -> None:
             hashed_password=get_password_hash("AnalystSOC123!"),
             full_name="Tier 2 SOC Analyst",
             role=UserRole.ANALYST.value,
-            tenant_id="tenant_default"
+            tenant_id="tenant_analyst_001"
         )
         db.add(analyst_user)
 

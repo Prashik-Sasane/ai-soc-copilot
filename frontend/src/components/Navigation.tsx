@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   ShieldAlert,
   LayoutDashboard,
@@ -13,16 +13,22 @@ import {
   Search,
   BookOpen,
   Zap,
-  Activity,
+  LogOut,
+  User as UserIcon,
   CheckCircle2,
-  Terminal
 } from 'lucide-react';
-import { triggerSyntheticScenario } from '@/lib/api';
+import { triggerSyntheticScenario, getCurrentUser, clearAuth, UserItem } from '@/lib/api';
 
 export default function Navigation() {
   const pathname = usePathname();
+  const router = useRouter();
   const [isSimulating, setIsSimulating] = useState(false);
   const [simMessage, setSimMessage] = useState<string | null>(null);
+  const [user, setUser] = useState<UserItem | null>(null);
+
+  useEffect(() => {
+    setUser(getCurrentUser());
+  }, [pathname]);
 
   const navItems = [
     { label: 'SOC Dashboard', href: '/', icon: LayoutDashboard },
@@ -41,11 +47,34 @@ export default function Navigation() {
       const res = await triggerSyntheticScenario();
       setSimMessage('Attack Scenario Ingested!');
       setTimeout(() => setSimMessage(null), 4000);
-    } catch (e) {
-      setSimMessage('Scenario trigger requested');
+    } catch (e: any) {
+      setSimMessage(e?.message || 'Scenario trigger requested');
       setTimeout(() => setSimMessage(null), 3000);
     } finally {
       setIsSimulating(false);
+    }
+  };
+
+  const handleLogout = () => {
+    clearAuth();
+    router.push('/login');
+  };
+
+  const roleLabel = (role?: string) => {
+    switch (role) {
+      case 'admin': return 'SOC Admin';
+      case 'analyst': return 'SOC Analyst';
+      case 'viewer': return 'Read-Only Viewer';
+      default: return 'SOC Analyst';
+    }
+  };
+
+  const roleColor = (role?: string) => {
+    switch (role) {
+      case 'admin': return 'text-rose-400';
+      case 'analyst': return 'text-cyan-400';
+      case 'viewer': return 'text-emerald-400';
+      default: return 'text-cyan-400';
     }
   };
 
@@ -88,6 +117,26 @@ export default function Navigation() {
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-mono text-emerald-400">SOC Telemetry: Active</span>
           </div>
+
+          {/* User Profile & Logout */}
+          <div className="flex items-center space-x-3 pl-3 border-l border-soc-cardBorder">
+            <div className="text-right">
+              <div className="text-xs font-semibold text-white flex items-center justify-end gap-1">
+                <UserIcon className="w-3.5 h-3.5 text-purple-400" />
+                <span>{user?.full_name || user?.email?.split('@')[0] || 'Analyst'}</span>
+              </div>
+              <div className={`text-[10px] font-mono ${roleColor(user?.role)}`}>
+                {roleLabel(user?.role)}
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-lg bg-soc-card border border-soc-cardBorder text-soc-textMuted hover:text-rose-400 hover:border-rose-800/50 transition-all"
+              title="Sign Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -104,11 +153,10 @@ export default function Navigation() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  isActive
+                className={`flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${isActive
                     ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 shadow-cyan-glow'
                     : 'text-soc-textMuted hover:text-white hover:bg-soc-hover'
-                }`}
+                  }`}
               >
                 <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-soc-textMuted'}`} />
                 <span>{item.label}</span>
@@ -121,11 +169,11 @@ export default function Navigation() {
         <div className="p-3.5 rounded-xl bg-soc-card border border-soc-cardBorder space-y-2">
           <div className="flex items-center justify-between text-xs">
             <span className="text-soc-textMuted">Tenant:</span>
-            <span className="font-mono text-cyan-400">tenant_default</span>
+            <span className="font-mono text-cyan-400">{user?.tenant_id || 'tenant_default'}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-soc-textMuted">Role:</span>
-            <span className="text-white font-medium">Senior SOC Lead</span>
+            <span className={`font-medium ${roleColor(user?.role)}`}>{roleLabel(user?.role)}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-soc-textMuted">RAG Engine:</span>

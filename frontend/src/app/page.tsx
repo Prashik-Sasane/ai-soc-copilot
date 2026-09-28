@@ -10,7 +10,6 @@ import {
   ArrowUpRight,
   Bot,
   Zap,
-  CheckCircle,
   AlertTriangle,
   RefreshCw
 } from 'lucide-react';
@@ -23,9 +22,11 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [statsRes, alertsRes] = await Promise.all([
         getDashboardStats(),
@@ -33,7 +34,8 @@ export default function DashboardPage() {
       ]);
       setStats(statsRes);
       setAlerts(alertsRes.items || []);
-    } catch (e) {
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load dashboard data');
       console.error(e);
     } finally {
       setLoading(false);
@@ -46,15 +48,21 @@ export default function DashboardPage() {
 
   const handleSimulate = async () => {
     setSimulating(true);
+    setError(null);
     try {
       await triggerSyntheticScenario();
       await fetchData();
-    } catch (e) {
+    } catch (e: any) {
+      setError(e?.message || 'Failed to inject scenario');
       console.error(e);
     } finally {
       setSimulating(false);
     }
   };
+
+  const sev = stats?.alerts_by_severity || { critical: 0, high: 0, medium: 0, low: 0 };
+  const sevTotal = sev.critical + sev.high + sev.medium + sev.low || 1;
+  const sevPct = (val: number) => Math.max(0, Math.round((val / sevTotal) * 1000) / 10);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -63,9 +71,13 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-bold text-white tracking-tight">Security Operations Dashboard</h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-rose-950 text-rose-300 border border-rose-800/50 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-              THREAT LEVEL: ELEVATED
+            <span className={`px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold border flex items-center gap-1 ${
+              stats?.critical_incidents > 0 || sev.critical > 0
+                ? 'bg-rose-950 text-rose-300 border-rose-800/50'
+                : 'bg-amber-950 text-amber-300 border-amber-800/50'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${stats?.critical_incidents > 0 || sev.critical > 0 ? 'bg-rose-500 animate-ping' : 'bg-amber-500 animate-pulse'}`} />
+              THREAT LEVEL: {loading ? 'LOADING...' : (stats?.threat_level || 'NOMINAL')}
             </span>
           </div>
           <p className="text-sm text-soc-textMuted mt-1">
@@ -78,6 +90,7 @@ export default function DashboardPage() {
             onClick={fetchData}
             className="p-2.5 rounded-xl bg-soc-card border border-soc-cardBorder text-soc-textMuted hover:text-white transition-all"
             title="Refresh Data"
+            disabled={loading}
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -92,33 +105,39 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-800/60 text-rose-300 text-sm">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
       {/* Metrics Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Normalized Events"
-          value={stats?.total_events ? stats.total_events.toLocaleString() : '14,250'}
-          subtitle="+1,420 events/min velocity"
+          value={loading ? '—' : (stats?.total_events ? stats.total_events.toLocaleString() : '0')}
+          subtitle={loading ? 'Loading telemetry...' : `${Math.floor((stats?.total_events || 0) / 10)} events/min estimate`}
           icon={Activity}
           color="cyan"
         />
         <StatCard
           title="Active Alerts"
-          value={stats?.total_alerts || '24'}
-          subtitle="2 Critical, 7 High"
+          value={loading ? '—' : (stats?.total_alerts || '0')}
+          subtitle={loading ? '' : `${sev.critical} Critical • ${sev.high} High`}
           icon={AlertTriangle}
           color="amber"
         />
         <StatCard
           title="Correlated Incidents"
-          value={stats?.open_incidents || '3'}
-          subtitle="1 Requiring Urgent Action"
+          value={loading ? '—' : (stats?.open_incidents || '0')}
+          subtitle={loading ? '' : `${stats?.critical_incidents || 0} Requiring Urgent Action`}
           icon={Flame}
           color="rose"
         />
         <StatCard
           title="MTTR (Mean Response)"
-          value={`${stats?.mean_time_to_respond_mins || '14.2'} min`}
-          subtitle="-440ms RAG Latency"
+          value={loading ? '—' : `${stats?.mean_time_to_respond_mins || '0.0'} min`}
+          subtitle={loading ? '' : 'RAG vector retrieval active'}
           icon={Clock}
           color="emerald"
         />
@@ -133,52 +152,63 @@ export default function DashboardPage() {
             <span>Alert Severity Breakdown</span>
           </h2>
 
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-rose-400">Critical (2)</span>
-                <span className="text-soc-textMuted">8.3%</span>
-              </div>
-              <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
-                <div className="bg-rose-500 h-2 rounded-full w-[8.3%]" />
-              </div>
+          {loading ? (
+            <div className="space-y-4">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="animate-pulse space-y-1">
+                  <div className="h-3 bg-soc-card rounded w-1/3" />
+                  <div className="h-2 bg-soc-card rounded-full w-full" />
+                </div>
+              ))}
             </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span className="text-rose-400">Critical ({sev.critical})</span>
+                  <span className="text-soc-textMuted">{sevPct(sev.critical)}%</span>
+                </div>
+                <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
+                  <div className="bg-rose-500 h-2 rounded-full transition-all" style={{ width: `${sevPct(sev.critical)}%` }} />
+                </div>
+              </div>
 
-            <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-amber-400">High (7)</span>
-                <span className="text-soc-textMuted">29.1%</span>
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span className="text-amber-400">High ({sev.high})</span>
+                  <span className="text-soc-textMuted">{sevPct(sev.high)}%</span>
+                </div>
+                <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
+                  <div className="bg-amber-500 h-2 rounded-full transition-all" style={{ width: `${sevPct(sev.high)}%` }} />
+                </div>
               </div>
-              <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
-                <div className="bg-amber-500 h-2 rounded-full w-[29.1%]" />
-              </div>
-            </div>
 
-            <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-cyan-400">Medium (10)</span>
-                <span className="text-soc-textMuted">41.6%</span>
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span className="text-cyan-400">Medium ({sev.medium})</span>
+                  <span className="text-soc-textMuted">{sevPct(sev.medium)}%</span>
+                </div>
+                <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
+                  <div className="bg-cyan-500 h-2 rounded-full transition-all" style={{ width: `${sevPct(sev.medium)}%` }} />
+                </div>
               </div>
-              <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
-                <div className="bg-cyan-500 h-2 rounded-full w-[41.6%]" />
-              </div>
-            </div>
 
-            <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-emerald-400">Low (5)</span>
-                <span className="text-soc-textMuted">21.0%</span>
-              </div>
-              <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
-                <div className="bg-emerald-500 h-2 rounded-full w-[21%]" />
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span className="text-emerald-400">Low ({sev.low})</span>
+                  <span className="text-soc-textMuted">{sevPct(sev.low)}%</span>
+                </div>
+                <div className="w-full bg-soc-card rounded-full h-2 overflow-hidden border border-soc-cardBorder">
+                  <div className="bg-emerald-500 h-2 rounded-full transition-all" style={{ width: `${sevPct(sev.low)}%` }} />
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="pt-4 border-t border-soc-cardBorder space-y-3">
             <div className="flex items-center justify-between text-xs">
               <span className="text-soc-textMuted">Correlation Engine Status</span>
-              <span className="text-emerald-400 font-mono">Active (F1: 1.0)</span>
+              <span className="text-emerald-400 font-mono">Active</span>
             </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-soc-textMuted">RAG Vector Storage</span>
@@ -186,7 +216,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-soc-textMuted">MITRE Mapping Service</span>
-              <span className="text-purple-400 font-mono">v14 ATT&CK Sync</span>
+              <span className="text-purple-400 font-mono">ATT&CK v14 Synced</span>
             </div>
           </div>
 
@@ -215,37 +245,59 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          <div className="divide-y divide-soc-cardBorder">
-            {alerts.slice(0, 4).map((alert) => (
-              <div key={alert.id} className="py-3.5 flex items-start justify-between gap-4 group">
-                <div className="space-y-1">
-                  <div className="flex items-center space-x-2.5">
-                    <SeverityBadge severity={alert.severity} />
-                    <span className="font-semibold text-sm text-white group-hover:text-cyan-400 transition-colors">
-                      {alert.title}
-                    </span>
-                  </div>
-                  <p className="text-xs text-soc-textMuted line-clamp-1">{alert.description}</p>
-                  <div className="flex items-center space-x-3 text-[11px] font-mono text-soc-textMuted">
-                    <span>Source: <strong className="text-soc-textMain">{alert.source.toUpperCase()}</strong></span>
-                    <span>Asset: <strong className="text-cyan-400">{alert.asset_id || 'N/A'}</strong></span>
-                    <span>Status: <strong className="text-amber-400">{alert.status}</strong></span>
+          {loading ? (
+            <div className="divide-y divide-soc-cardBorder">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="py-4 animate-pulse">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-2 flex-1">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-14 h-5 bg-soc-card rounded" />
+                        <div className="h-4 bg-soc-card rounded w-1/2" />
+                      </div>
+                      <div className="h-3 bg-soc-card rounded w-3/4" />
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
+          ) : alerts.length === 0 ? (
+            <div className="py-12 text-center">
+              <p className="text-soc-textMuted text-sm">No alerts in queue. Click <strong>&quot;Ingest Attack Scenario&quot;</strong> to generate synthetic test data.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-soc-cardBorder">
+              {alerts.slice(0, 4).map((alert) => (
+                <div key={alert.id} className="py-3.5 flex items-start justify-between gap-4 group">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2.5">
+                      <SeverityBadge severity={alert.severity} />
+                      <span className="font-semibold text-sm text-white group-hover:text-cyan-400 transition-colors">
+                        {alert.title}
+                      </span>
+                    </div>
+                    <p className="text-xs text-soc-textMuted line-clamp-1">{alert.description}</p>
+                    <div className="flex items-center space-x-3 text-[11px] font-mono text-soc-textMuted">
+                      <span>Source: <strong className="text-soc-textMain">{alert.source.toUpperCase()}</strong></span>
+                      <span>Asset: <strong className="text-cyan-400">{alert.asset_id || 'N/A'}</strong></span>
+                      <span>Status: <strong className="text-amber-400">{alert.status}</strong></span>
+                    </div>
+                  </div>
 
-                <div className="flex items-center space-x-2 shrink-0">
-                  <Link
-                    href={`/copilot?query=${encodeURIComponent(`Analyze alert: ${alert.title}`)}`}
-                    className="p-2 rounded-lg bg-soc-card border border-soc-cardBorder text-cyan-400 hover:bg-cyan-950/40 text-xs font-medium flex items-center space-x-1"
-                    title="Investigate with AI Copilot"
-                  >
-                    <Bot className="w-4 h-4" />
-                    <span className="hidden sm:inline">Investigate</span>
-                  </Link>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <Link
+                      href={`/copilot?alert_id=${alert.id}&query=${encodeURIComponent(`Analyze alert: ${alert.title}`)}`}
+                      className="p-2 rounded-lg bg-soc-card border border-soc-cardBorder text-cyan-400 hover:bg-cyan-950/40 text-xs font-medium flex items-center space-x-1"
+                      title="Investigate with AI Copilot"
+                    >
+                      <Bot className="w-4 h-4" />
+                      <span className="hidden sm:inline">Investigate</span>
+                    </Link>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

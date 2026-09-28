@@ -64,13 +64,14 @@ def register_user(
             detail="User with this email already exists"
         )
     
+    user_uuid = uuid.uuid4().hex[:12]
     new_user = User(
-        id=f"user_{uuid.uuid4().hex[:12]}",
+        id=f"user_{user_uuid}",
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
         full_name=user_in.full_name,
         role=user_in.role if user_in.role in [r.value for r in UserRole] else UserRole.ANALYST.value,
-        tenant_id="tenant_default"
+        tenant_id=f"tenant_{user_uuid}"
     )
     db.add(new_user)
     db.commit()

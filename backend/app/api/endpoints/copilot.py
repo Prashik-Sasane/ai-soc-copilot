@@ -13,6 +13,7 @@ router = APIRouter()
 
 
 @router.post("/investigate", response_model=CopilotResponse)
+@router.post("/query", response_model=CopilotResponse)
 def run_investigation(
     query_req: CopilotQueryRequest,
     db: Session = Depends(get_db),
@@ -40,7 +41,10 @@ def get_investigation_history(
 ):
     items = (
         db.query(InvestigationHistory)
-        .filter(InvestigationHistory.tenant_id == current_user.tenant_id)
+        .filter(
+            InvestigationHistory.tenant_id == current_user.tenant_id,
+            InvestigationHistory.user_id == current_user.id
+        )
         .order_by(InvestigationHistory.created_at.desc())
         .limit(limit)
         .all()
