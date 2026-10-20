@@ -1,0 +1,45 @@
+# Development overrides — applied automatically by `docker compose up`.
+# Hot reload for both services, so you stop rebuilding on every edit.
+#
+#   Dev (hot reload):  docker compose up -d
+#   Production:        docker compose -f docker-compose.yml up -d --build
+#
+# Docker Compose only auto-loads a file named exactly `docker-compose.override.yml` in this directory.
+# Everything here is merged on top of docker-compose.yml; the production file is unchanged.
+
+services:
+  backend:
+    # `--reload` watches /app; the bind mount below feeds it your host source.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    volumes:
+      - ./backend:/app
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      # Bind mounts on Windows/macOS do not emit inotify events; force polling so edits are detected.
+      - WATCHFILES_FORCE_POLLING=true
+
+  frontend:
+    # Dev server instead of the production `next start`.
+    command: npm run dev -- -H 0.0.0.0
+    volumes:
+      - ./frontend:/app
+      # Named-less anonymous volumes: keep the image's node_modules (includes devDependencies)
+      # and a container-local .next, so the host bind mount does not shadow them.
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      # Same polling requirement for the file watcher on Windows/macOS bind mounts.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true

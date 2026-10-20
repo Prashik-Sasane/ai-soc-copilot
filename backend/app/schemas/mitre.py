@@ -9,7 +9,11 @@ class MitreTechniqueRead(BaseModel):
     description: str
     platforms: List[str] = []
     data_sources: List[str] = []
-    data_version: str = "v14.1"
+    data_version: Optional[str] = None
+    source_url: Optional[str] = None
+    retrieved_at: Optional[str] = None
+    is_bundled_fallback: bool = False
+    keywords: List[str] = []
 
 
 class MitreMappingHypothesis(BaseModel):
@@ -20,3 +24,7 @@ class MitreMappingHypothesis(BaseModel):
     rationale: str
     evidence_refs: List[str] = []
     requires_analyst_validation: bool = True
+    status: str = "candidate"
+    data_version: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None

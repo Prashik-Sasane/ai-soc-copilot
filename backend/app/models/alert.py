@@ -17,11 +17,16 @@ class Alert(Base):
     event_ids = Column(JSON, default=list)  # List of related event UUIDs
     correlated_group_id = Column(String, index=True, nullable=True)
     correlation_reason = Column(Text, nullable=True)
+    link_reasons = Column(JSON, default=list)
+    incident_id = Column(String, index=True, nullable=True)
+    mitre_candidates = Column(JSON, default=list)
     
     asset_id = Column(String, nullable=True)
+    affected_user = Column(String, nullable=True)
     assigned_to = Column(String, nullable=True)  # User ID or email
     acknowledged_at = Column(DateTime, nullable=True)
     dismiss_reason = Column(Text, nullable=True)
+    detection_rule_id = Column(String, index=True, nullable=True)
     
     tenant_id = Column(String, default="tenant_default", index=True)
     is_simulated = Column(String, default="false")

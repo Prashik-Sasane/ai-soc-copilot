@@ -34,8 +34,13 @@ class AlertRead(BaseModel):
     event_ids: List[str] = []
     correlated_group_id: Optional[str] = None
     correlation_reason: Optional[str] = None
+    link_reasons: Optional[List] = None
+    incident_id: Optional[str] = None
+    mitre_candidates: Optional[List] = None
+    detection_rule_id: Optional[str] = None
     
     asset_id: Optional[str] = None
+    affected_user: Optional[str] = None
     assigned_to: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
     dismiss_reason: Optional[str] = None

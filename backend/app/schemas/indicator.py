@@ -11,10 +11,13 @@ class IndicatorRead(BaseModel):
     indicator_type: str
     reputation_score: float
     risk_level: str
+    lookup_status: Optional[str] = "unknown"
     threat_actor: Optional[str] = None
     source_attribution: Optional[str] = None
+    provider_name: Optional[str] = None
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
+    cached_until: Optional[datetime] = None
     raw_enrichment: Optional[Dict[str, Any]] = None
     confidence: float
     created_at: datetime

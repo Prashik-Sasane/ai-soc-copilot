@@ -38,6 +38,8 @@ class CopilotResponse(BaseModel):
     recommendations: List[RecommendationItem] = []
     confidence: float = 0.88
     limitations: List[str] = []
+    llm_used: bool = False
+    embedding_mode: str = "offline_hash"
     timestamp: datetime
 
 

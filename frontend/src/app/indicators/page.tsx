@@ -96,7 +96,7 @@ export default function IndicatorsPage() {
             <span>Threat Intelligence & Indicator Enrichment</span>
           </h1>
           <p className="text-sm text-soc-textMuted mt-1">
-            Query IP addresses, domains, URLs, and file hashes against threat intelligence aggregators.
+            Live lookups use VirusTotal and/or AlienVault OTX only when API keys are configured. Unknown, not found, and provider-unavailable are distinct from clean.
           </p>
         </div>
         <button
@@ -182,6 +182,11 @@ export default function IndicatorsPage() {
                 >
                   Risk: {result.risk_level?.toUpperCase() || 'UNKNOWN'}
                 </span>
+                {result.lookup_status && (
+                  <span className="px-2 py-0.5 rounded border border-soc-cardBorder text-xs font-mono text-amber-300">
+                    Lookup: {result.lookup_status}
+                  </span>
+                )}
               </div>
               <h2 className="text-xl font-bold font-mono text-cyan-400 break-all leading-snug">
                 {result.indicator_value}
@@ -191,21 +196,14 @@ export default function IndicatorsPage() {
             <div className="text-right shrink-0">
               <span className="text-xs text-soc-textMuted block font-mono">Reputation Risk Score</span>
               <div className="flex items-baseline gap-1 justify-end">
-                <span
-                  className={`text-3xl font-bold font-mono ${
-                    result.reputation_score >= 80
-                      ? 'text-rose-500'
-                      : result.reputation_score >= 50
-                      ? 'text-amber-400'
-                      : result.reputation_score >= 20
-                      ? 'text-cyan-400'
-                      : 'text-emerald-400'
-                  }`}
-                >
-                  {result.reputation_score}
+                <span className="text-3xl font-bold font-mono text-white">
+                  {result.lookup_status && result.lookup_status !== 'ok' ? '—' : result.reputation_score}
                 </span>
                 <span className="text-sm text-soc-textMuted font-mono"> / 100</span>
               </div>
+              {result.cached_until && (
+                <span className="text-[10px] font-mono text-soc-textMuted">Cached until {new Date(result.cached_until).toLocaleString()}</span>
+              )}
             </div>
           </div>
 
@@ -220,7 +218,7 @@ export default function IndicatorsPage() {
             <div className="p-4 rounded-xl bg-soc-sidebar border border-soc-cardBorder space-y-1">
               <span className="text-xs text-soc-textMuted">Primary Intelligence Sources:</span>
               <div className="font-semibold text-cyan-300 text-sm">
-                {result.source_attribution || 'Local Mock Feed'}
+                {result.provider_name || result.source_attribution || 'No live provider result'}
               </div>
             </div>
 

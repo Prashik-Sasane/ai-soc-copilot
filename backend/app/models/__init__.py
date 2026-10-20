@@ -7,6 +7,8 @@ from app.models.indicator import Indicator
 from app.models.knowledge import KnowledgeDocument, DocumentChunk
 from app.models.investigation import InvestigationHistory, AnalystFeedback
 from app.models.audit import AuditLog
+from app.models.ingest import IngestSource, IngestParseError
+from app.models.mitre import MitreTechnique
 
 __all__ = [
     "Base",
@@ -21,4 +23,7 @@ __all__ = [
     "InvestigationHistory",
     "AnalystFeedback",
     "AuditLog",
+    "IngestSource",
+    "IngestParseError",
+    "MitreTechnique",
 ]

@@ -31,5 +31,7 @@ class AnalystFeedback(Base):
     user_id = Column(String, index=True, nullable=False)
     rating = Column(String, nullable=False)  # useful, incorrect, unsupported, incomplete
     notes = Column(Text, nullable=True)
+    citations_json = Column(JSON, default=list)
+    tenant_id = Column(String, default="tenant_default", index=True)
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

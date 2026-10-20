@@ -5,13 +5,17 @@ export interface AlertItem {
   title: string;
   description?: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
-  status: 'new' | 'acknowledged' | 'investigating' | 'dismissed' | 'resolved';
+  status: 'new' | 'acknowledged' | 'investigating' | 'escalated' | 'dismissed' | 'resolved';
   source: string;
   rule_name?: string;
   asset_id?: string;
+  assigned_to?: string;
   event_ids: string[];
   correlated_group_id?: string;
   correlation_reason?: string;
+  link_reasons?: string[];
+  incident_id?: string;
+  is_simulated?: string;
   created_at: string;
   updated_at?: string;
 }
@@ -26,13 +30,39 @@ export interface IncidentItem {
   alert_ids: string[];
   indicator_ids: string[];
   mitre_techniques: string[];
+  mitre_mappings?: Array<Record<string, any>>;
+  severity_rationale?: string;
+  affected_assets?: string[];
+  affected_users?: string[];
+  change_history_json?: Array<Record<string, any>>;
+  is_simulated?: string;
   timeline_json: Array<{
     timestamp: string;
+    kind?: 'event' | 'correlation' | 'analyst_action';
     event_type: string;
     title: string;
-    description: string;
+    description?: string;
     severity: string;
     source: string;
+    event_id?: string;
+    event_ids?: string[];
+    alert_ids?: string[];
+    occurrences?: number;
+    first_seen?: string;
+    last_seen?: string;
+    stage?: string;
+    technique_id?: string | null;
+    technique_name?: string | null;
+    confidence?: number | null;
+    origin?: {
+      source?: string;
+      event_ref?: string | null;
+      provider?: string | null;
+      channel?: string | null;
+      windows_event_id?: number | string | null;
+      record_id?: string | null;
+    };
+    is_simulated?: string;
   }>;
   recommendations_json: Array<{
     category: 'response' | 'investigative';
@@ -40,6 +70,10 @@ export interface IncidentItem {
     description: string;
     priority: 'high' | 'medium' | 'low';
     requires_approval: boolean;
+    approved?: boolean;
+    approved_by?: string;
+    approved_at?: string;
+    execution_status?: string;
   }>;
   created_at: string;
   updated_at: string;
@@ -50,8 +84,11 @@ export interface IndicatorItem {
   indicator_value: string;
   indicator_type: 'ip' | 'domain' | 'file_hash' | 'url';
   reputation_score: number;
-  risk_level: 'critical' | 'high' | 'medium' | 'low';
+  risk_level: 'critical' | 'high' | 'medium' | 'low' | 'unknown' | 'not_found' | 'clean';
+  lookup_status?: string;
   threat_actor?: string;
+  provider_name?: string;
+  cached_until?: string;
   source_attribution?: string;
   raw_enrichment?: any;
   confidence: number;
@@ -90,6 +127,8 @@ export interface CopilotResponse {
   }>;
   confidence: number;
   limitations: string[];
+  llm_used?: boolean;
+  embedding_mode?: string;
   timestamp: string;
 }
 
@@ -195,11 +234,46 @@ export async function getAlerts() {
   return fetchAPI<{ items: AlertItem[]; total: number; page: number; size: number }>('/alerts', { method: 'GET' });
 }
 
-export async function updateAlertStatus(alertId: string, status: string) {
+export async function updateAlertStatus(alertId: string, status: string, assignedTo?: string) {
   return fetchAPI<AlertItem>(`/alerts/${alertId}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, assigned_to: assignedTo }),
   });
+}
+
+export async function updateIncident(incidentId: string, payload: Record<string, string>) {
+  return fetchAPI<IncidentItem>(`/incidents/${incidentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function approveIncidentRecommendation(incidentId: string, index: number) {
+  return fetchAPI<IncidentItem>(`/incidents/${incidentId}/recommendations/${index}/approve`, {
+    method: 'POST',
+  });
+}
+
+export async function getIngestStatus() {
+  return fetchAPI<any>('/ingest/status', { method: 'GET' });
+}
+
+export async function uploadKnowledgeDocument(payload: {
+  title: string;
+  content: string;
+  category?: string;
+  source_ref?: string;
+  owner?: string;
+  version?: string;
+}) {
+  return fetchAPI<KnowledgeDocument>('/knowledge', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function syncMitreAttack() {
+  return fetchAPI<any>('/mitre/sync', { method: 'POST' });
 }
 
 export async function getIncidents() {
@@ -254,6 +328,9 @@ export interface KnowledgeDocument {
   content: string;
   status: string;
   chunk_count: string;
+  owner?: string;
+  version?: string;
+  retrieved_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -279,12 +356,23 @@ export async function seedKnowledgePlaybooks() {
   return fetchAPI('/knowledge/seed-playbooks', { method: 'POST' });
 }
 
+export async function syncCisaKevCatalog(limit: number = 100) {
+  return fetchAPI<{ message: string; document_id: string; source_ref: string; chunk_count: string }>(
+    `/knowledge/sync-cisa-kev?limit=${limit}`,
+    { method: 'POST' },
+  );
+}
+
+export async function reindexKnowledgeVectors() {
+  return fetchAPI<{ message: string; chunk_count: number }>('/knowledge/reindex', { method: 'POST' });
+}
+
 export async function getAuditLogs(limit: number = 50) {
-  return fetchAPI<AuditLogEntry[]>(`/feedback/audit?limit=${limit}`, { method: 'GET' });
+  return fetchAPI<AuditLogEntry[]>(`/audit?limit=${limit}`, { method: 'GET' });
 }
 
 export async function submitFeedback(investigationId: string, rating: string, notes?: string) {
-  return fetchAPI('/feedback/feedback', {
+  return fetchAPI('/feedback', {
     method: 'POST',
     body: JSON.stringify({ investigation_id: investigationId, rating, notes }),
   });

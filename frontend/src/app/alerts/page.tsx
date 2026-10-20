@@ -157,7 +157,7 @@ export default function AlertsPage() {
               {filteredAlerts.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-soc-textMuted">
-                    No alerts matching the selected filters.
+                    No alerts yet. Waiting for ingested events and detection rules — this queue does not invent live alerts.
                   </td>
                 </tr>
               ) : (
@@ -167,7 +167,12 @@ export default function AlertsPage() {
                       <SeverityBadge severity={alert.severity} />
                     </td>
                     <td className="py-3 px-4">
-                      <div className="font-medium text-white">{alert.title}</div>
+                      <div className="font-medium text-white">
+                        {alert.title}
+                        {/* {alert.is_simulated === 'true' && (
+                          <span className="ml-2 text-[10px] font-mono text-amber-300">SIMULATED</span>
+                        )} */}
+                      </div>
                       <div className="text-[11px] text-soc-textMuted line-clamp-1">{alert.description}</div>
                     </td>
                     <td className="py-3 px-4 font-mono text-cyan-400">
@@ -185,6 +190,7 @@ export default function AlertsPage() {
                         <option value="new">New</option>
                         <option value="acknowledged">Acknowledged</option>
                         <option value="investigating">Investigating</option>
+                        <option value="escalated">Escalated</option>
                         <option value="dismissed">Dismissed</option>
                         <option value="resolved">Resolved</option>
                       </select>
@@ -251,6 +257,9 @@ export default function AlertsPage() {
                 </div>
               </div>
 
+              {selectedAlert.assigned_to && (
+                <div className="text-soc-textMuted">Assigned to: <span className="text-white">{selectedAlert.assigned_to}</span></div>
+              )}
               {selectedAlert.correlation_reason && (
                 <div className="p-3.5 rounded-xl bg-purple-950/40 border border-purple-800/40 text-purple-200">
                   <span className="font-semibold text-purple-300">Multi-Source Correlation Rationale:</span>

@@ -16,6 +16,11 @@ class Incident(Base):
     alert_ids = Column(JSON, default=list)  # Associated alert IDs
     indicator_ids = Column(JSON, default=list)  # Associated threat intel indicator IDs
     mitre_techniques = Column(JSON, default=list)  # List of ATT&CK technique IDs e.g. ["T1059.001"]
+    mitre_mappings = Column(JSON, default=list)  # structured candidate vs confirmed mappings
+    severity_rationale = Column(Text, nullable=True)
+    affected_assets = Column(JSON, default=list)
+    affected_users = Column(JSON, default=list)
+    change_history_json = Column(JSON, default=list)
     
     timeline_json = Column(JSON, default=list)  # Chronological array of timeline objects
     recommendations_json = Column(JSON, default=list)  # List of investigative & response recommendations

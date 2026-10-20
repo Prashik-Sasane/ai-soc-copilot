@@ -11,7 +11,8 @@ from app.models.indicator import Indicator
 from app.models.investigation import InvestigationHistory
 from app.services.rag_service import RAGService
 from app.services.mitre_service import MitreService
-from app.services.threat_intel_service import ThreatIntelService
+from app.services.llm_service import LLMService
+from app.services.vector_service import VectorService
 
 
 class InvestigationState(TypedDict):
@@ -148,18 +149,11 @@ class AISocCopilotWorkflow:
                         })
 
         if not retrieved_events and not retrieved_alerts:
-            # Fallback: fetch recent events
-            evts = db.query(SecurityEvent).filter(SecurityEvent.tenant_id == tenant_id).order_by(SecurityEvent.created_at.desc()).limit(5).all()
-            for e in evts:
-                retrieved_events.append({
-                    "id": e.id,
-                    "event_id": e.event_id,
-                    "source": e.source,
-                    "event_type": e.event_type,
-                    "user": e.user,
-                    "command_line": cls.sanitize_untrusted_input(e.command_line),
-                    "raw_data": cls.sanitize_untrusted_input(e.raw_data)
-                })
+            state.setdefault("limitations", [])
+            state["limitations"].append(
+                "No incident or alert was specified, and no matching evidence was bound to this query. "
+                "Recent tenant events were not used as a silent substitute."
+            )
 
         # 2. Query RAG Knowledge Base Chunks
         rag_chunks = RAGService.search_similar_chunks(db=db, query=state["query"], top_k=2, tenant_id=tenant_id)
@@ -195,72 +189,169 @@ class AISocCopilotWorkflow:
         findings = list(state["findings"])
         recommendations = []
 
-        # 1. Build Citations from retrieved events & RAG
+        for a in alerts:
+            citations.append({
+                "citation_id": f"cit_alt_{a['id'][-6:]}",
+                "source_type": "alert",
+                "source_id": a["id"],
+                "title": f"Alert: {a['title']}",
+                "snippet": f"{a.get('rule_name') or 'rule unknown'} on {a.get('asset_id') or 'unknown asset'}",
+                "relevance_score": 0.9,
+            })
         for e in events:
             citations.append({
                 "citation_id": f"cit_evt_{e['id'][-6:]}",
                 "source_type": "event",
                 "source_id": e["id"],
                 "title": f"Security Event: {e['event_type']} ({e['source']})",
-                "snippet": e.get("raw_data")[:180] if e.get("raw_data") else f"Event ID {e['event_id']}",
+                "snippet": (e.get("raw_data") or f"Event ID {e['event_id']}")[:180],
                 "relevance_score": 0.95
             })
-
+        for ind in indicators:
+            citations.append({
+                "citation_id": f"cit_ind_{ind['id'][-6:]}",
+                "source_type": "indicator",
+                "source_id": ind["id"],
+                "title": f"Indicator {ind['type']}: {ind['value']}",
+                "snippet": f"Lookup status/risk: {ind.get('risk_level', 'unknown')}",
+                "relevance_score": 0.7,
+            })
         for r in rag_chunks:
             citations.append({
                 "citation_id": f"cit_kb_{r['chunk_id'][-6:]}",
                 "source_type": "knowledge_base",
                 "source_id": r["chunk_id"],
-                "title": f"Playbook: {r['title']} - Section {r['section']}",
+                "title": f"Knowledge: {r['title']} - {r['section']}",
                 "snippet": r["content"][:180],
                 "relevance_score": r["relevance_score"]
             })
 
-        # 2. Formulate Findings & Summary
+        evidence_weak = not events and not alerts
         if alerts:
             alert_titles = ", ".join([a["title"] for a in alerts[:2]])
-            summary = f"Investigation analyzed {len(alerts)} alert(s) [{alert_titles}] and {len(events)} associated security event(s)."
+            summary = (
+                f"Investigation analyzed {len(alerts)} alert(s) [{alert_titles}] and {len(events)} associated security event(s). "
+                f"Recommendations below are taken from retrieved knowledge text when available."
+            )
+        elif events:
+            summary = f"Investigation evaluated {len(events)} security events against tenant-isolated knowledge sources."
         else:
-            summary = f"Investigation evaluated {len(events)} security events against active playbooks and threat intelligence feeds."
+            summary = (
+                "Insufficient bound evidence for this query. No incident/alert context was provided or found. "
+                "Do not treat the following as a live investigation result."
+            )
+            findings.append("Evidence unavailable or too weak to support a high-confidence assessment.")
 
         if indicators:
             high_risk = [i for i in indicators if i.get("risk_level") in ["high", "critical"]]
+            unknown = [i for i in indicators if i.get("risk_level") in ["unknown", "not_found"]]
             if high_risk:
-                findings.append(f"Identified {len(high_risk)} high-risk indicator(s): {', '.join([i['value'] for i in high_risk])}")
+                findings.append(
+                    f"Identified {len(high_risk)} high-risk indicator(s): {', '.join([i['value'] for i in high_risk])} "
+                    f"(see indicator citations)."
+                )
+            if unknown:
+                findings.append(
+                    f"{len(unknown)} indicator(s) have unknown/not-found reputation and must not be treated as clean."
+                )
 
         if mitre:
             top_tech = mitre[0]
-            findings.append(f"Primary MITRE ATT&CK candidate: {top_tech['technique_id']} ({top_tech['name']}) under tactic {top_tech['tactic']} (Confidence: {top_tech['confidence']*100:.0f}%).")
+            findings.append(
+                f"Primary MITRE ATT&CK candidate (not confirmed): {top_tech['technique_id']} ({top_tech['name']}) "
+                f"under tactic {top_tech['tactic']} (Confidence: {top_tech['confidence']*100:.0f}%)."
+            )
 
-        # 3. Formulate Prioritized Recommendations (Investigative vs Response)
-        recommendations.append({
-            "category": "investigative",
-            "title": "Validate command line arguments and parent process tree",
-            "description": "Examine EDR telemetry for parent process spawning suspicious execution.",
-            "priority": "high",
-            "requires_approval": False
-        })
-        recommendations.append({
-            "category": "response",
-            "title": "Network Containment / Host Isolation",
-            "description": "Isolate host from local subnet via EDR agent if malicious C2 or credential dumping is confirmed.",
-            "priority": "high",
-            "requires_approval": True
-        })
+        # Recommendations come from the retrieved source text, so an analyst can
+        # verify each action against the knowledge-base citations above.
+        seen_actions = set()
+        for chunk in rag_chunks:
+            for line in chunk.get("content", "").splitlines():
+                action_match = re.match(r"^\s*(?:\d+[.)]|[-*]|Required Action:)\s+(.+)$", line, re.I)
+                if not action_match:
+                    continue
+                action = action_match.group(1).strip().strip("` ")
+                normalized = re.sub(r"\W+", " ", action.lower()).strip()
+                if len(action) < 18 or normalized in seen_actions:
+                    continue
+                seen_actions.add(normalized)
+                is_response = bool(re.search(r"\b(isolate|block|quarantin|disable|reset|revoke|contain|remove)\b", action, re.I))
+                recommendations.append({
+                    "category": "response" if is_response else "investigative",
+                    "title": action[:100],
+                    "description": f"Retrieved from {chunk['title']} ({chunk.get('section') or 'source text'}). Verify against the cited source and local procedures. Response actions remain recommendations until an authorized analyst approves them.",
+                    "priority": "high" if is_response else "medium",
+                    "requires_approval": is_response,
+                    "citation_id": f"cit_kb_{chunk['chunk_id'][-6:]}",
+                })
+                if len(recommendations) >= 4:
+                    break
+            if len(recommendations) >= 4:
+                break
+        if not recommendations:
+            recommendations.append({
+                "category": "investigative",
+                "title": "Gather and validate incident-specific evidence",
+                "description": "No retrieved knowledge source contained an explicit response step. Confirm affected assets, process lineage, and indicator reputation before taking action.",
+                "priority": "medium",
+                "requires_approval": False
+            })
 
-        limitations = [
-            "MITRE ATT&CK mappings are automated hypotheses requiring Tier 2 analyst validation.",
-            "External threat intelligence feed reputation scores reflect current cached snapshot data."
-        ]
+        embedding_mode = VectorService.embedding_mode()
+        findings_text = "\n".join(f"- {f}" for f in findings) or "- (none)"
+        citation_lines = "\n".join(
+            f"- {c['citation_id']} ({c['source_type']}): {c['title']} [source_id={c['source_id']}]"
+            for c in citations[:12]
+        ) or "- (none)"
+        llm_result = LLMService.summarize(
+            "You are a SOC investigation assistant. Write a concise, analyst-ready summary of the "
+            "evidence below in 2-4 sentences. Use only the facts provided. Do not invent or echo "
+            "citation IDs, ATT&CK IDs, hosts, or IOCs.\n\n"
+            f"Analyst question: {state['query']}\n\n"
+            f"Evidence summary: {summary}\n\n"
+            f"Findings:\n{findings_text}\n\n"
+            f"Citation index (reference only, do not repeat verbatim):\n{citation_lines}\n\n"
+            "Respond with the summary prose only."
+        )
+        llm_text = (llm_result.get("text") or "").strip()
+        # Guard against degenerate model output (e.g. a mirrored prompt fragment):
+        # only accept a substantive summary; otherwise keep the evidence template.
+        llm_used = bool(llm_result.get("used")) and len(llm_text) >= 40
+        if llm_used:
+            summary = llm_text
+        elif llm_result.get("error"):
+            findings.append(f"LLM summary skipped ({llm_result['error']}); using evidence template instead.")
+        elif llm_result.get("used"):
+            findings.append("LLM returned an unusable summary; using evidence template instead.")
+
+        limitations = list(state.get("limitations") or [])
+        limitations.extend([
+            "MITRE ATT&CK mappings are candidate hypotheses requiring analyst validation.",
+            "RAG retrieves approved knowledge; it does not train or fine-tune a model.",
+            "Response actions are recommendations until an authorized analyst approves them.",
+        ])
+        if embedding_mode == "offline_hash":
+            limitations.append("Knowledge retrieval is running in explicit offline/demo hash-embedding mode, not semantic embeddings.")
+        if not llm_used:
+            limitations.append("No configured LLM provider was used for this summary.")
+        if evidence_weak:
+            limitations.append("Evidence was weak or unavailable; confidence was lowered.")
+
+        evidence_points = min(len(events), 3) * 0.08 + min(len(alerts), 2) * 0.08
+        evidence_points += min(len(indicators), 2) * 0.05
+        evidence_points += 0.12 if rag_chunks else 0.0
+        confidence = round(min(0.92, 0.35 + evidence_points), 2)
+        if evidence_weak:
+            confidence = min(confidence, 0.28)
 
         state["summary"] = summary
         state["findings"] = findings
         state["cited_evidence"] = citations
         state["recommendations"] = recommendations
-        state["confidence"] = 0.88 if events or alerts else 0.65
+        state["confidence"] = confidence
         state["limitations"] = limitations
+        state["error"] = None
 
-        # Save to InvestigationHistory DB
         hist = InvestigationHistory(
             id=f"inv_{uuid.uuid4().hex[:10]}",
             query=state["query"],
@@ -272,16 +363,19 @@ class AISocCopilotWorkflow:
             response_json={
                 "summary": summary,
                 "findings": findings,
-                "limitations": limitations
+                "limitations": limitations,
+                "llm_used": llm_used,
+                "llm_provider": llm_result.get("provider"),
+                "embedding_mode": embedding_mode,
             },
             cited_evidence=citations,
             mitre_mappings=mitre,
-            confidence=state["confidence"],
+            confidence=confidence,
             tenant_id=state["tenant_id"]
         )
         db.add(hist)
         db.commit()
-
+        state["investigation_id"] = hist.id
         return state
 
     @classmethod
@@ -316,7 +410,7 @@ class AISocCopilotWorkflow:
         state = cls.node_response_generation(state, db=db)
 
         return {
-            "investigation_id": f"inv_{uuid.uuid4().hex[:8]}",
+            "investigation_id": state.get("investigation_id") or "",
             "query": state["query"],
             "summary": state["summary"],
             "findings": state["findings"],
@@ -325,5 +419,7 @@ class AISocCopilotWorkflow:
             "recommendations": state["recommendations"],
             "confidence": state["confidence"],
             "limitations": state["limitations"],
+            "llm_used": not any("No configured LLM provider was used" in x for x in state.get("limitations") or []),
+            "embedding_mode": VectorService.embedding_mode(),
             "timestamp": datetime.now(timezone.utc)
         }

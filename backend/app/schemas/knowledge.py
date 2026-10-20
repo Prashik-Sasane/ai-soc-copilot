@@ -8,6 +8,8 @@ class KnowledgeDocumentCreate(BaseModel):
     category: str = "playbook"  # playbook, advisory, mitre_ref, standard
     source_ref: Optional[str] = None
     content: str
+    owner: Optional[str] = None
+    version: Optional[str] = None
 
 
 class KnowledgeDocumentRead(BaseModel):
@@ -20,6 +22,9 @@ class KnowledgeDocumentRead(BaseModel):
     content: str
     status: str
     chunk_count: str
+    owner: Optional[str] = None
+    version: Optional[str] = None
+    retrieved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -28,6 +33,7 @@ class FeedbackCreate(BaseModel):
     investigation_id: str
     rating: str  # useful, incorrect, unsupported, incomplete
     notes: Optional[str] = None
+    citations: Optional[List[Dict[str, Any]]] = None
 
 
 class AuditLogRead(BaseModel):
@@ -41,4 +47,7 @@ class AuditLogRead(BaseModel):
     resource_type: str
     resource_id: Optional[str] = None
     details_json: Optional[Dict[str, Any]] = None
+    before_json: Optional[Dict[str, Any]] = None
+    after_json: Optional[Dict[str, Any]] = None
+    request_id: Optional[str] = None
     ip_address: Optional[str] = None

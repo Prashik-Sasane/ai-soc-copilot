@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Text, JSON, Integer
+from sqlalchemy import Column, String, DateTime, Text, JSON, Integer, UniqueConstraint
 from app.core.database import Base
 
 
 class SecurityEvent(Base):
     __tablename__ = "security_events"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "event_id", name="uq_event_tenant_event_id"),
+    )
 
     id = Column(String, primary_key=True, index=True)
     event_id = Column(String, index=True, nullable=False)
@@ -12,6 +15,9 @@ class SecurityEvent(Base):
     source = Column(String, index=True, nullable=False)  # edr, firewall, network, identity, dns, cloud, siem
     event_type = Column(String, index=True, nullable=False)  # process_creation, dns_query, network_conn, login
     severity = Column(String, default="low", index=True)  # low, medium, high, critical
+    ingest_source_id = Column(String, index=True, nullable=True)
+    idempotency_key = Column(String, index=True, nullable=True)
+    parse_warnings = Column(JSON, default=list)
     
     # Normalized Entity Fields
     src_ip = Column(String, index=True, nullable=True)

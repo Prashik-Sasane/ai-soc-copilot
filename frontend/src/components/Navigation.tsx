@@ -17,7 +17,7 @@ import {
   User as UserIcon,
   CheckCircle2,
 } from 'lucide-react';
-import { triggerSyntheticScenario, getCurrentUser, clearAuth, UserItem } from '@/lib/api';
+import { triggerSyntheticScenario, getCurrentUser, clearAuth, getIngestStatus, UserItem } from '@/lib/api';
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -25,10 +25,32 @@ export default function Navigation() {
   const [isSimulating, setIsSimulating] = useState(false);
   const [simMessage, setSimMessage] = useState<string | null>(null);
   const [user, setUser] = useState<UserItem | null>(null);
+  const [ingest, setIngest] = useState<any>(null);
 
   useEffect(() => {
     setUser(getCurrentUser());
   }, [pathname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const status = await getIngestStatus();
+        if (!cancelled) setIngest(status);
+      } catch {
+        if (!cancelled) setIngest(null);
+      }
+    };
+    load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [pathname]);
+
+  const demoEnabled = ingest?.demo_seeding_enabled === true;
+  const connected = ingest?.telemetry_state === 'connected';
 
   const navItems = [
     { label: 'SOC Dashboard', href: '/', icon: LayoutDashboard },
@@ -104,18 +126,27 @@ export default function Navigation() {
             </div>
           )}
 
-          <button
-            onClick={handleSimulate}
-            disabled={isSimulating}
-            className="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-medium text-xs shadow-cyan-glow transition-all active:scale-95 disabled:opacity-50"
-          >
-            <Zap className={`w-4 h-4 ${isSimulating ? 'animate-spin' : ''}`} />
-            <span>{isSimulating ? 'Injecting Attack...' : 'Simulate Attack Scenario'}</span>
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSimulate}
+              disabled={isSimulating}
+              className="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-medium text-xs shadow-cyan-glow transition-all active:scale-95 disabled:opacity-50"
+            >
+              <Zap className={`w-4 h-4 ${isSimulating ? 'animate-spin' : ''}`} />
+              <span>{isSimulating ? 'Injecting Simulated Attack...' : 'Simulate Attack (dev)'}</span>
+            </button>
+          )}
 
-          <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-soc-card border border-soc-cardBorder text-xs text-soc-textMuted">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-mono text-emerald-400">SOC Telemetry: Active</span>
+          <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-soc-card border text-xs ${connected ? 'border-emerald-800/50 text-soc-textMuted' : 'border-amber-800/50'}`}>
+            <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+            <span className={`font-mono ${connected ? 'text-emerald-400' : 'text-amber-300'}`}>
+              {connected ? 'Source connected' : 'No source connected / waiting for data'}
+            </span>
+            {ingest?.last_event_at && (
+              <span className="font-mono text-soc-textMuted hidden lg:inline">
+                last event {new Date(ingest.last_event_at).toLocaleTimeString()}
+              </span>
+            )}
           </div>
 
           {/* User Profile & Logout */}
@@ -177,7 +208,7 @@ export default function Navigation() {
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-soc-textMuted">RAG Engine:</span>
-            <span className="text-emerald-400 font-mono">LangGraph + pgvector</span>
+            <span className="text-emerald-400 font-mono">explicit workflow · tenant-scoped</span>
           </div>
         </div>
       </aside>

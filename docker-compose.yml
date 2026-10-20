@@ -31,7 +31,18 @@ services:
       # Also supports postgresql+psycopg:// if using psycopg v3 driver
       - DATABASE_URL=postgresql+psycopg2://ai_soc_user:12410279@db:5432/ai_soc_db
       - SECRET_KEY=production_secret_key_change_in_prod_min_32_bytes_long_abc123
-      - ENVIRONMENT=production
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - ENABLE_DEMO_SEEDING=${ENABLE_DEMO_SEEDING:-false}
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-mock}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-gemini-embedding-001}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
+      - VT_API_KEY=${VT_API_KEY:-}
+      - OTX_API_KEY=${OTX_API_KEY:-}
+      - TI_CACHE_TTL_MINUTES=${TI_CACHE_TTL_MINUTES:-60}
+      - INGEST_WEBHOOK_TOKENS=${INGEST_WEBHOOK_TOKENS:-webhook-default:dev-ingest-token}
       - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://frontend:3000
       - API_V1_STR=/api/v1
     depends_on:

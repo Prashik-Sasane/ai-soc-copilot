@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from datetime import datetime, timezone
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -10,6 +11,47 @@ from app.models.incident import Incident
 from app.models.event import SecurityEvent
 
 router = APIRouter()
+
+
+def _as_aware(value):
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _closed_at(incident: Incident):
+    """Timestamp the incident was closed, taken from its change history when present."""
+    for entry in incident.change_history_json or []:
+        after = entry.get("after") if isinstance(entry, dict) else None
+        if isinstance(after, dict) and after.get("status") == "closed":
+            try:
+                return _as_aware(datetime.fromisoformat(entry["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return _as_aware(incident.updated_at)
+
+
+def _mean_time_to_respond_minutes(db: Session, tenant_id: str):
+    """Mean response time over closed incidents. Returns None when nothing is closed yet,
+    because MTTR can only be derived from incidents that actually completed."""
+    closed = (
+        db.query(Incident)
+        .filter(Incident.tenant_id == tenant_id, Incident.status == "closed")
+        .all()
+    )
+    durations = []
+    for incident in closed:
+        created = _as_aware(incident.created_at)
+        closed_at = _closed_at(incident)
+        if created is None or closed_at is None:
+            continue
+        minutes = (closed_at - created).total_seconds() / 60.0
+        if minutes >= 0:
+            durations.append(minutes)
+    if not durations:
+        return None
+    return round(sum(durations) / len(durations), 1)
+
 
 
 def _build_stats_response(db: Session, tenant_id: str):
@@ -66,8 +108,12 @@ def _build_stats_response(db: Session, tenant_id: str):
         "total_incidents": total_incidents,
         "new_alerts": new_alerts,
         "investigating_alerts": investigating_alerts,
-        "mean_time_to_respond_mins": 14.2,
-        "threat_level": "ELEVATED (DEFCON 3)" if critical_incidents > 0 or alerts_by_severity["critical"] > 0 else "MODERATE (DEFCON 4)",
+        "mean_time_to_respond_mins": _mean_time_to_respond_minutes(db, tenant_id),
+        "threat_level": (
+            "CRITICAL ALERTS PRESENT"
+            if critical_incidents > 0 or alerts_by_severity["critical"] > 0
+            else ("ACTIVE ALERTS" if total_alerts else "NO TELEMETRY")
+        ),
         "alerts_by_severity": alerts_by_severity,
         "alerts_by_source": alerts_by_source,
     }

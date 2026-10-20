@@ -16,6 +16,11 @@ import {
   getKnowledgeDocuments,
   getAuditLogs,
   seedKnowledgePlaybooks,
+  syncCisaKevCatalog,
+  reindexKnowledgeVectors,
+  uploadKnowledgeDocument,
+  syncMitreAttack,
+  getIngestStatus,
   KnowledgeDocument,
   AuditLogEntry
 } from '@/lib/api';
@@ -32,7 +37,18 @@ export default function KnowledgePage() {
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
+  const [syncingKev, setSyncingKev] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncingMitre, setSyncingMitre] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadTitle, setUploadTitle] = useState('');
+  const [uploadSource, setUploadSource] = useState('');
+  const [uploadOwner, setUploadOwner] = useState('');
+  const [uploadVersion, setUploadVersion] = useState('1');
+  const [uploadContent, setUploadContent] = useState('');
+  const [demoEnabled, setDemoEnabled] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -54,6 +70,9 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     loadData();
+    getIngestStatus()
+      .then((s) => setDemoEnabled(s?.demo_seeding_enabled === true))
+      .catch(() => setDemoEnabled(false));
   }, []);
 
   const handleSeed = async () => {
@@ -70,6 +89,74 @@ export default function KnowledgePage() {
     }
   };
 
+  const handleSyncKev = async () => {
+    setSyncingKev(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await syncCisaKevCatalog();
+      setNotice(result.message);
+      await loadData();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to sync the CISA KEV catalog');
+    } finally {
+      setSyncingKev(false);
+    }
+  };
+
+  const handleSyncMitre = async () => {
+    setSyncingMitre(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await syncMitreAttack();
+      setNotice(result.message || 'MITRE ATT&CK synced');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to sync MITRE ATT&CK');
+    } finally {
+      setSyncingMitre(false);
+    }
+  };
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadTitle.trim() || !uploadContent.trim()) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await uploadKnowledgeDocument({
+        title: uploadTitle,
+        content: uploadContent,
+        category: 'playbook',
+        source_ref: uploadSource,
+        owner: uploadOwner,
+        version: uploadVersion,
+      });
+      setUploadTitle('');
+      setUploadContent('');
+      setNotice('Document indexed for tenant-isolated retrieval.');
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleReindex = async () => {
+    setReindexing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await reindexKnowledgeVectors();
+      setNotice(result.message);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to re-index knowledge vectors');
+    } finally {
+      setReindexing(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -79,10 +166,34 @@ export default function KnowledgePage() {
             <span>RAG Knowledge Base & System Audit Trail</span>
           </h1>
           <p className="text-sm text-soc-textMuted mt-1">
-            Vectorized playbooks for RAG retrieval and complete immutable analyst audit history.
+            RAG retrieves approved documents for citations. It does not train or fine-tune a language model. Retrieval is tenant-isolated.
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleReindex}
+            disabled={reindexing || loading}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-soc-sidebar border border-purple-700/50 text-purple-300 hover:bg-purple-950/40 text-xs font-medium transition-all disabled:opacity-50"
+          >
+            {reindexing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {reindexing ? 'Re-indexing...' : 'Re-index Vectors'}
+          </button>
+          <button
+            onClick={handleSyncMitre}
+            disabled={syncingMitre || loading}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-soc-sidebar border border-rose-700/50 text-rose-300 hover:bg-rose-950/40 text-xs font-medium transition-all disabled:opacity-50"
+          >
+            {syncingMitre ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+            {syncingMitre ? 'Syncing ATT&CK...' : 'Sync MITRE ATT&CK'}
+          </button>
+          <button
+            onClick={handleSyncKev}
+            disabled={syncingKev || loading}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-soc-sidebar border border-cyan-700/50 text-cyan-300 hover:bg-cyan-950/40 text-xs font-medium transition-all disabled:opacity-50"
+          >
+            {syncingKev ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+            {syncingKev ? 'Syncing CISA...' : 'Sync CISA KEV'}
+          </button>
           <button
             onClick={loadData}
             disabled={loading}
@@ -91,14 +202,16 @@ export default function KnowledgePage() {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <button
-            onClick={handleSeed}
-            disabled={seeding || loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-medium transition-all shadow-purple-glow disabled:opacity-50"
-          >
-            {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
-            {seeding ? 'Seeding...' : 'Seed Default Playbooks'}
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSeed}
+              disabled={seeding || loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-medium transition-all shadow-purple-glow disabled:opacity-50"
+            >
+              {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+              {seeding ? 'Seeding...' : 'Seed Default Playbooks'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -112,12 +225,32 @@ export default function KnowledgePage() {
         </div>
       )}
 
+      <form onSubmit={handleUpload} className="glass-panel p-5 rounded-2xl border border-soc-cardBorder space-y-3">
+        <h3 className="text-sm font-semibold text-white">Upload approved playbook / advisory</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <input value={uploadTitle} onChange={(e) => setUploadTitle(e.target.value)} placeholder="Title" className="px-3 py-2 rounded-xl bg-soc-sidebar border border-soc-cardBorder text-xs text-white" />
+          <input value={uploadSource} onChange={(e) => setUploadSource(e.target.value)} placeholder="Source URL or ref" className="px-3 py-2 rounded-xl bg-soc-sidebar border border-soc-cardBorder text-xs text-white" />
+          <input value={uploadOwner} onChange={(e) => setUploadOwner(e.target.value)} placeholder="Owner" className="px-3 py-2 rounded-xl bg-soc-sidebar border border-soc-cardBorder text-xs text-white" />
+          <input value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} placeholder="Version" className="px-3 py-2 rounded-xl bg-soc-sidebar border border-soc-cardBorder text-xs text-white" />
+        </div>
+        <textarea value={uploadContent} onChange={(e) => setUploadContent(e.target.value)} placeholder="Document content..." rows={4} className="w-full px-3 py-2 rounded-xl bg-soc-sidebar border border-soc-cardBorder text-xs text-white" />
+        <button type="submit" disabled={uploading} className="px-4 py-2 rounded-xl bg-cyan-700 text-white text-xs disabled:opacity-50">
+          {uploading ? 'Indexing...' : 'Index document'}
+        </button>
+      </form>
+
+      {notice && (
+        <div className="glass-panel p-3 rounded-xl border border-emerald-800/50 bg-emerald-950/20 text-xs text-emerald-300">
+          {notice}
+        </div>
+      )}
+
       {/* RAG Playbooks */}
       <div className="glass-panel p-6 rounded-2xl border border-soc-cardBorder space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white flex items-center space-x-2">
             <FileText className="w-5 h-5 text-cyan-400" />
-            <span>Approved RAG Knowledge Base Playbooks</span>
+            <span>RAG Knowledge Sources</span>
           </h2>
           <span className="px-2.5 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-xs font-mono text-cyan-400">
             {documents.length} Documents
@@ -135,15 +268,17 @@ export default function KnowledgePage() {
               <BookOpen className="w-6 h-6 text-soc-textMuted" />
             </div>
             <p className="text-sm text-soc-textMuted">
-              No playbooks indexed yet. Seed the default IR playbooks to enable RAG-powered Copilot.
+              No knowledge sources are indexed. Sync CISA KEV for current public vulnerability records{demoEnabled ? ', or load the demo playbooks.' : '.'}
             </p>
-            <button
-              onClick={handleSeed}
-              disabled={seeding}
-              className="px-4 py-2 rounded-xl bg-purple-950/60 text-purple-300 border border-purple-800/40 hover:bg-purple-900/60 text-xs font-medium transition-all disabled:opacity-50"
-            >
-              {seeding ? 'Seeding Playbooks...' : 'Seed Default Playbooks'}
-            </button>
+            {demoEnabled && (
+              <button
+                onClick={handleSeed}
+                disabled={seeding}
+                className="px-4 py-2 rounded-xl bg-purple-950/60 text-purple-300 border border-purple-800/40 hover:bg-purple-900/60 text-xs font-medium transition-all disabled:opacity-50"
+              >
+                {seeding ? 'Seeding Playbooks...' : 'Seed Default Playbooks'}
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -159,6 +294,11 @@ export default function KnowledgePage() {
                 <p className="text-[11px] text-soc-textMuted line-clamp-2 leading-relaxed">
                   {doc.content.replace(/\s+/g, ' ').slice(0, 160)}...
                 </p>
+                {doc.source_ref && (
+                  <p className="text-[10px] text-cyan-300/70 font-mono line-clamp-1" title={doc.source_ref}>
+                    Source: {doc.source_ref}
+                  </p>
+                )}
                 <div className="flex items-center justify-between text-xs text-soc-textMuted pt-2 border-t border-soc-cardBorder">
                   <span
                     className="text-emerald-400 font-mono flex items-center gap-1"

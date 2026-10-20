@@ -19,7 +19,6 @@ def test_seed_playbooks(client: TestClient):
 
 def test_copilot_investigation_rag(client: TestClient):
     headers = get_auth_header(client)
-    # Seed scenario & playbooks first
     client.post("/api/v1/events/seed-demo", headers=headers)
     client.post("/api/v1/knowledge/seed-playbooks", headers=headers)
 
@@ -41,6 +40,51 @@ def test_copilot_investigation_rag(client: TestClient):
     assert "cited_evidence" in data
     assert "recommendations" in data
     assert len(data["cited_evidence"]) > 0
+    assert data["investigation_id"].startswith("inv_")
+    assert data.get("llm_used") is False
+    source_types = {c["source_type"] for c in data["cited_evidence"]}
+    assert source_types & {"event", "alert", "knowledge_base", "indicator"}
+
+
+def test_copilot_weak_evidence_low_confidence(client: TestClient):
+    headers = get_auth_header(client)
+    query_resp = client.post(
+        "/api/v1/copilot/investigate",
+        json={"query": "What is happening with an incident that does not exist?"},
+        headers=headers,
+    )
+    assert query_resp.status_code == 200
+    data = query_resp.json()
+    assert data["confidence"] <= 0.4
+    assert any("weak" in x.lower() or "unavailable" in x.lower() or "Insufficient" in x for x in data["findings"] + data["limitations"])
+
+
+def test_feedback_persists_for_investigation(client: TestClient):
+    headers = get_auth_header(client)
+    client.post("/api/v1/knowledge/seed-playbooks", headers=headers)
+    query_resp = client.post(
+        "/api/v1/copilot/investigate",
+        json={"query": "Summarize current tenant evidence."},
+        headers=headers,
+    )
+    inv_id = query_resp.json()["investigation_id"]
+    fb = client.post(
+        "/api/v1/feedback",
+        json={"investigation_id": inv_id, "rating": "useful", "notes": "Grounded citations were usable."},
+        headers=headers,
+    )
+    assert fb.status_code == 200
+    assert "does not train" in fb.json()["message"].lower()
+    audit = client.get("/api/v1/audit", headers=headers)
+    assert audit.status_code == 200
+    actions = [row["action"] for row in audit.json()]
+    assert "feedback_submitted" in actions
+
+
+def test_audit_is_tenant_scoped(client: TestClient):
+    headers = get_auth_header(client)
+    logs = client.get("/api/v1/audit", headers=headers).json()
+    assert isinstance(logs, list)
 
 
 def test_mitre_techniques(client: TestClient):
@@ -62,3 +106,4 @@ def test_mitre_mapping(client: TestClient):
     technique_ids = [m["technique_id"] for m in mappings]
     assert "T1059.001" in technique_ids
     assert "T1003.001" in technique_ids
+    assert all(m.get("status") == "candidate" for m in mappings)

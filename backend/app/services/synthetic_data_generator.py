@@ -4,10 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 
-from app.models.event import SecurityEvent
-from app.models.alert import Alert
-from app.models.incident import Incident
-from app.models.indicator import Indicator
+from app.services.ingestion_service import EventIngestionService
 
 
 _HOSTNAMES = [
@@ -360,289 +357,47 @@ def generate_synthetic_attack_scenario(db: Session, tenant_id: str = "tenant_def
             }
         ]
 
-    created_events = []
-    created_event_ids = []
+    # Simulated records go through the same ingest → detect → correlate path as live data.
     for item in events_raw:
-        evt = SecurityEvent(
-            id=f"evt_sim_{uuid.uuid4().hex[:10]}",
-            event_id=item["event_id"],
-            timestamp=datetime.fromisoformat(item["timestamp"]),
-            source=item["source"],
-            event_type=item["event_type"],
-            severity=item["severity"],
-            src_ip=item.get("src_ip"),
-            dst_ip=item.get("dst_ip"),
-            dst_port=item.get("dst_port"),
-            domain=item.get("domain"),
-            user=item.get("user"),
-            process_name=item.get("process_name"),
-            command_line=item.get("command_line"),
-            file_hash=item.get("file_hash"),
-            hostname=item.get("hostname"),
-            raw_data=item["raw_data"],
-            metadata_json={
-                "simulated_scenario": scenario["name"],
-                "variant": variant,
-                "threat_actor": threat_actor
-            },
-            tenant_id=tenant_id,
-            is_simulated="true"
-        )
-        db.add(evt)
-        created_events.append(evt)
-        created_event_ids.append(evt.id)
-
-    # ============ Alerts (variant-specific titles) ============
-    if variant == "classic_apt_chain":
-        a1_title = "Suspicious Obfuscated PowerShell Execution"
-        a1_desc = f"Encoded PowerShell script spawned by Office binary WINWORD.EXE downloading external payload on {hostname}."
-        a1_sev = "high"
-        a1_rule = "EDR_RULE_POWERSHELL_ENC"
-        a1_src = "edr"
-
-        a2_title = "Potential LSASS Credential Dumping via Comsvcs"
-        a2_desc = f"Process comsvcs.dll attempted to generate minidump of lsass.exe process memory on {hostname}."
-        a2_sev = "critical"
-        a2_rule = "EDR_RULE_LSASS_DUMP"
-        a2_src = "edr"
-
-        a3_title = "Outbound C2 Beaconing to Known Malicious IP"
-        a3_desc = f"{hostname} established outbound TLS connection to high-risk IP {malicious_ip}."
-        a3_sev = "high"
-        a3_rule = "FW_RULE_C2_OUTBOUND"
-        a3_src = "firewall"
-    elif variant == "ransomware_chain":
-        a1_title = "RDP Brute Force Successful Authentication"
-        a1_desc = f"1,247 failed RDP attempts culminating in successful admin login from {external_src_ip} on {hostname}."
-        a1_sev = "high"
-        a1_rule = "FW_RULE_RDP_BRUTE"
-        a1_src = "firewall"
-
-        a2_title = "SMB Lateral Movement via Compromised Creds"
-        a2_desc = f"Psexec lateral movement using stolen domain admin credentials targeting second host."
-        a2_sev = "critical"
-        a2_rule = "EDR_RULE_LATERAL_MOVE"
-        a2_src = "identity"
-
-        a3_title = "Mass File Encryption Ransomware Pattern"
-        a3_desc = f"4,210 file modifications with .encrypted extensions on {hostname} - ransomware staging confirmed."
-        a3_sev = "critical"
-        a3_rule = "EDR_RULE_RANSOM_ENCRYPT"
-        a3_src = "edr"
-    elif variant == "data_exfil_chain":
-        a1_title = "Unauthenticated Webshell Upload via ProxyShell"
-        a1_desc = f"ASPX webshell planted in Outlook Web Access auth directory on Exchange server."
-        a1_sev = "high"
-        a1_rule = "WAF_RULE_WEBSHELL_UPLOAD"
-        a1_src = "edr"
-
-        a2_title = "NTDS.dit Active Directory Credential Theft"
-        a2_desc = f"ntdsutil.exe used to create full IFM backup of Active Directory database hive."
-        a2_sev = "critical"
-        a2_rule = "EDR_RULE_NTDS_DUMP"
-        a2_src = "edr"
-
-        a3_title = "2.3GB Data Exfiltration via DNS Tunneling"
-        a3_desc = f"Massive data egress via high-volume DNS TXT queries to malicious domain {c2_domain}."
-        a3_sev = "critical"
-        a3_rule = "DNS_RULE_TUNNEL_EXFIL"
-        a3_src = "dns"
-    else:  # usb
-        a1_title = "USB Removable Media Auto-Execution"
-        a1_desc = f"Batch script launch from removable USB drive E: on {hostname} - possible USB dropper infection."
-        a1_sev = "medium"
-        a1_rule = "EDR_RULE_USB_LAUNCHER"
-        a1_src = "edr"
-
-        a2_title = "Process Hollowing Injection into Explorer.exe"
-        a2_desc = f"Unsigned remote thread injected into explorer.exe process memory via hollowing technique."
-        a2_sev = "high"
-        a2_rule = "EDR_RULE_PROC_INJECT"
-        a2_src = "edr"
-
-        a3_title = "Interactive Reverse Shell Egress Confirmed"
-        a3_desc = f"Periodic 60-second beacons + TTY prompt detected: reverse shell active on {hostname} to {malicious_ip}."
-        a3_sev = "critical"
-        a3_rule = "FW_RULE_REV_SHELL"
-        a3_src = "firewall"
-
-    alert_1 = Alert(
-        id=f"alt_sim_{uuid.uuid4().hex[:10]}",
-        title=a1_title,
-        description=a1_desc,
-        severity=a1_sev,
-        status="new",
-        source=a1_src,
-        rule_name=a1_rule,
-        event_ids=[created_event_ids[0], created_event_ids[1]] if variant in ["classic_apt_chain", "ransomware_chain"] else [created_event_ids[1]],
-        asset_id=hostname,
+        item["metadata_json"] = {
+            "simulated_scenario": scenario["name"],
+            "variant": variant,
+            "threat_actor": threat_actor,
+            "is_simulated": True,
+        }
+    ingest_result = EventIngestionService.ingest_records(
+        db=db,
+        records=events_raw,
         tenant_id=tenant_id,
-        is_simulated="true"
+        is_simulated=True,
+        ingest_source_id="demo-simulator",
+        run_detection=True,
+        run_correlation=True,
+        connector_type="demo",
     )
-    alert_2 = Alert(
-        id=f"alt_sim_{uuid.uuid4().hex[:10]}",
-        title=a2_title,
-        description=a2_desc,
-        severity=a2_sev,
-        status="new",
-        source=a2_src,
-        rule_name=a2_rule,
-        event_ids=[created_event_ids[2], created_event_ids[1]] if len(created_event_ids) > 3 else [created_event_ids[2]],
-        asset_id=hostname,
-        tenant_id=tenant_id,
-        is_simulated="true"
+    from app.models.incident import Incident
+    incidents = (
+        db.query(Incident)
+        .filter(Incident.tenant_id == tenant_id, Incident.is_simulated == "true")
+        .order_by(Incident.created_at.desc())
+        .all()
     )
-    alert_3 = Alert(
-        id=f"alt_sim_{uuid.uuid4().hex[:10]}",
-        title=a3_title,
-        description=a3_desc,
-        severity=a3_sev,
-        status="new",
-        source=a3_src,
-        rule_name=a3_rule,
-        event_ids=[created_event_ids[3], created_event_ids[4]],
-        asset_id=hostname,
-        tenant_id=tenant_id,
-        is_simulated="true"
-    )
-
-    db.add_all([alert_1, alert_2, alert_3])
-
-    # ============ Indicators ============
-    ind_ip = Indicator(
-        id=f"ind_sim_{uuid.uuid4().hex[:10]}",
-        indicator_value=malicious_ip,
-        indicator_type="ip",
-        reputation_score=round(75 + random.random() * 23, 1),
-        risk_level=random.choice(["high", "critical", "high"]),
-        threat_actor=threat_actor,
-        source_attribution=enrich_source,
-        raw_enrichment={
-            "positives": random.randint(28, 62),
-            "total": 70,
-            "tags": random.sample(["c2", "cobalt-strike", "ransomware", "exfil", "dga", "phishing", "malware-distribution"], k=random.randint(2, 4))
-        },
-        confidence=round(0.85 + random.random() * 0.14, 2),
-        tenant_id=tenant_id
-    )
-    ind_domain = Indicator(
-        id=f"ind_sim_{uuid.uuid4().hex[:10]}",
-        indicator_value=c2_domain,
-        indicator_type="domain",
-        reputation_score=round(80 + random.random() * 19, 1),
-        risk_level="critical",
-        threat_actor=threat_actor,
-        source_attribution=enrich_source,
-        raw_enrichment={
-            "pulse_count": random.randint(8, 28),
-            "tags": random.sample(["c2", "phishing", "exfil", "dga", "malware", "ransomware-c2"], k=random.randint(2, 4))
-        },
-        confidence=round(0.90 + random.random() * 0.09, 2),
-        tenant_id=tenant_id
-    )
-    db.add_all([ind_ip, ind_domain])
-
-    # ============ Incident ============
-    inc_severity = "critical"
-    if variant == "ransomware_chain":
-        inc_title = f"[Simulated] Ransomware Deployment: RDP Brute -> Lateral Move -> Encryption on {hostname}"
-        inc_desc = f"Guided incident: Successful RDP brute force from {external_src_ip}, SMB lateral movement to secondary host, then mass .encrypted file writes consistent with crypto ransomware staging."
-    elif variant == "data_exfil_chain":
-        inc_title = f"[Simulated] Data Breach: Webshell -> NTDS Theft -> DNS Exfiltration via {c2_domain}"
-        inc_desc = f"Guided incident: Exchange webshell upload, full Active Directory credential theft via NTDS.dit IFM, then 2.3GB of data exfiltrated via DNS tunneling to {c2_domain}."
-    elif variant == "usb_initial_chain":
-        inc_title = f"[Simulated] USB Dropper: Removable Media -> Injection -> Reverse Shell to {malicious_ip}"
-        inc_desc = f"Guided incident: USB launcher.bat auto-exec, process hollowing injection into explorer.exe, scheduled task persistence, then interactive reverse shell egress to {malicious_ip}:4443."
-    else:
-        inc_title = f"[Simulated] Multi-Stage Credential Theft & Outbound C2 on {hostname}"
-        inc_desc = f"Guided incident: Phishing delivery from {phish_domain} followed by obfuscated PowerShell payload, LSASS memory dump, and active TLS C2 beaconing to {malicious_ip}."
-
-    incident = Incident(
-        id=f"inc_sim_{uuid.uuid4().hex[:10]}",
-        title=inc_title,
-        description=inc_desc,
-        severity=inc_severity,
-        status="investigating",
-        alert_ids=[alert_1.id, alert_2.id, alert_3.id],
-        indicator_ids=[ind_ip.id, ind_domain.id],
-        mitre_techniques=random.sample(
-            ["T1059.001", "T1003.001", "T1071.001", "T1566.002", "T1021.002", "T1486", "T1041", "T1053.005", "T1078.003", "T1055.012"],
-            k=3
-        ),
-        timeline_json=[
-            {
-                "timestamp": events_raw[0]["timestamp"],
-                "event_type": events_raw[0]["event_type"],
-                "title": f"Stage 1: {events_raw[0]['event_type'].replace('_', ' ').title()}",
-                "description": events_raw[0]["raw_data"],
-                "severity": events_raw[0]["severity"],
-                "source": events_raw[0]["source"]
-            },
-            {
-                "timestamp": events_raw[1]["timestamp"],
-                "event_type": events_raw[1]["event_type"],
-                "title": f"Stage 2: {events_raw[1]['event_type'].replace('_', ' ').title()}",
-                "description": events_raw[1]["raw_data"],
-                "severity": events_raw[1]["severity"],
-                "source": events_raw[1]["source"]
-            },
-            {
-                "timestamp": events_raw[2]["timestamp"],
-                "event_type": events_raw[2]["event_type"],
-                "title": f"Stage 3: {events_raw[2]['event_type'].replace('_', ' ').title()}",
-                "description": events_raw[2]["raw_data"],
-                "severity": events_raw[2]["severity"],
-                "source": events_raw[2]["source"]
-            },
-            {
-                "timestamp": events_raw[4]["timestamp"],
-                "event_type": events_raw[4]["event_type"],
-                "title": f"Stage 4: {events_raw[4]['event_type'].replace('_', ' ').title()}",
-                "description": events_raw[4]["raw_data"],
-                "severity": events_raw[4]["severity"],
-                "source": events_raw[4]["source"]
-            }
-        ],
-        recommendations_json=[
-            {
-                "category": "response",
-                "title": f"Isolate {hostname} from Network",
-                "description": f"Isolate {hostname} immediately via EDR agent to prevent further lateral movement and exfiltration.",
-                "priority": "high",
-                "requires_approval": True
-            },
-            {
-                "category": "response",
-                "title": f"Reset Credentials for {victim_user if variant in ['classic_apt_chain', 'usb_initial_chain'] else 'All Affected Domain Admins'}",
-                "description": "Force password reset and revoke all active SSO / Kerberos session tokens for affected accounts.",
-                "priority": "high",
-                "requires_approval": True
-            },
-            {
-                "category": "investigative",
-                "title": f"Block Indicator {malicious_ip} & {c2_domain} on Perimeter",
-                "description": f"Add {malicious_ip} and {c2_domain} to firewall egress blocklist + DNS RPZ sinkhole.",
-                "priority": "medium",
-                "requires_approval": False
-            }
-        ],
-        tenant_id=tenant_id,
-        is_simulated="true"
-    )
-
-    db.add(incident)
-    db.commit()
-
     return {
-        "incident_id": incident.id,
-        "alerts_count": 3,
-        "events_count": len(created_events),
-        "indicators_count": 2,
+        "incident_id": incidents[0].id if incidents else None,
+        "incident_ids": [i.id for i in incidents[:5]],
+        "alerts_count": ingest_result.alerts_created,
+        "events_count": ingest_result.accepted_count,
+        "indicators_count": 0,
         "scenario": scenario["name"],
         "variant": variant,
         "asset_id": hostname,
         "threat_actor": threat_actor,
         "malicious_ip": malicious_ip,
         "c2_domain": c2_domain,
-        "is_simulated": True
+        "is_simulated": True,
+        "ingest_job_id": ingest_result.job_id,
+        "duplicates": ingest_result.duplicate_count,
+        "incidents_created": ingest_result.incidents_created,
+        "note": "All generated records are labeled simulated. No live threat-intel scores were invented.",
     }
+

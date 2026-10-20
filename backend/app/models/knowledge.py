@@ -13,6 +13,9 @@ class KnowledgeDocument(Base):
     content = Column(Text, nullable=False)
     status = Column(String, default="indexed")  # pending, indexing, indexed, error
     chunk_count = Column(String, default="0")
+    owner = Column(String, nullable=True)
+    version = Column(String, nullable=True)
+    retrieved_at = Column(DateTime, nullable=True)
     metadata_json = Column(JSON, nullable=True)
     
     tenant_id = Column(String, default="tenant_default", index=True)
@@ -31,6 +34,7 @@ class DocumentChunk(Base):
     
     # Store embedding array as JSON for portability across SQLite and PostgreSQL
     embedding_json = Column(JSON, nullable=True)
+    embedding_provider = Column(String, nullable=True)
     chunk_index = Column(String, default="0")
     
     tenant_id = Column(String, default="tenant_default", index=True)

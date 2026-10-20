@@ -8,6 +8,7 @@ from app.core.security import verify_password, get_password_hash, create_access_
 from app.core.deps import get_current_user
 from app.models.user import User, UserRole
 from app.models.audit import AuditLog
+from app.services.audit_service import write_audit
 from app.schemas.auth import Token, LoginRequest, UserCreate, UserRead
 
 router = APIRouter()
@@ -26,18 +27,15 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Audit log
-    audit_entry = AuditLog(
-        id=f"audit_{uuid.uuid4().hex[:12]}",
-        user_id=user.id,
-        user_email=user.email,
+    write_audit(
+        db,
         action="auth_login",
         resource_type="auth",
-        details_json={"message": "User logged in successfully"},
-        tenant_id=user.tenant_id
+        resource_id=user.id,
+        user=user,
+        details={"message": "User logged in successfully"},
+        commit=True,
     )
-    db.add(audit_entry)
-    db.commit()
 
     access_token = create_access_token(subject=user.id, role=user.role)
     return {

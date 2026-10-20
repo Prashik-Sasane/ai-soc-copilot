@@ -16,5 +16,8 @@ class AuditLog(Base):
     resource_id = Column(String, nullable=True)
     
     details_json = Column(JSON, nullable=True)
+    before_json = Column(JSON, nullable=True)
+    after_json = Column(JSON, nullable=True)
+    request_id = Column(String, index=True, nullable=True)
     ip_address = Column(String, nullable=True)
     tenant_id = Column(String, default="tenant_default", index=True)

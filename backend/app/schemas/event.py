@@ -49,6 +49,8 @@ class SecurityEventRead(BaseModel):
     
     raw_data: str
     metadata_json: Optional[Dict[str, Any]] = None
+    ingest_source_id: Optional[str] = None
+    parse_warnings: Optional[List[str]] = None
     tenant_id: str
     is_simulated: str
     created_at: datetime
@@ -60,3 +62,8 @@ class IngestionBatchResponse(BaseModel):
     rejected_count: int
     errors: List[str] = []
     job_id: str
+    duplicate_count: int = 0
+    alerts_created: int = 0
+    incidents_created: int = 0
+    ingest_source_id: Optional[str] = None
+    is_simulated: bool = False

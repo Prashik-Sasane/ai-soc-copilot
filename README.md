@@ -1,219 +1,166 @@
-# AI SOC Copilot - Enterprise Autonomous Threat Triage & RAG System
+# AI SOC Copilot
 
-[![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.11-009688.svg)](https://fastapi.tiangolo.com)
-[![Next.js 14](https://img.shields.io/badge/Frontend-Next.js%2014%20%7C%20TailwindCSS-black.svg)](https://nextjs.org)
-[![PostgreSQL pgvector](https://img.shields.io/badge/VectorDB-pgvector%20%7C%20PostgreSQL%2016-336791.svg)](https://github.com/pgvector/pgvector)
-[![Pytest](https://img.shields.io/badge/Tests-16%2F16%20Passed-brightgreen.svg)](backend/tests)
-[![Evaluation Benchmark](https://img.shields.io/badge/Benchmark-1.0%20F1%20%7C%20--442ms-blueviolet.svg)](backend/eval/eval_benchmark.py)
+Evidence-grounded SOC investigation workspace. FastAPI backend, Next.js frontend, PostgreSQL/SQLite storage.
 
----
+The system ingests events through an authenticated webhook or file upload, normalizes them, raises alerts from detection rules, correlates related alerts into incidents, retrieves tenant-isolated knowledge (RAG), maps candidate MITRE ATT&CK techniques, and optionally enriches IOCs with VirusTotal / AlienVault OTX. Copilot recommendations cite stored evidence. Response actions are recommendations until an analyst approves them; this platform does not isolate hosts or reset credentials.
 
-## 1. What is AI SOC Copilot?
-
-**AI SOC Copilot** is a production-oriented, evidence-grounded Security Operations Center (SOC) Copilot. It ingests heterogeneous security logs (EDR, Firewall, Identity, DNS), normalizes them to a Common Security Event Schema, correlates multi-stage attack chains, enriches indicators with threat intelligence, maps observed behaviors to the **MITRE ATT&CK Framework**, and enables AI-guided security investigations grounded in retrieved evidence (RAG) with complete analyst auditability.
-
-### Key Capabilities
-- **Multi-Source Event Ingestion**: Parses and normalizes security events across EDR, Network Firewall, Identity Provider, and DNS telemetry.
-- **Rule & Time-Window Correlation Engine**: Automatically groups related alerts by target asset/user within configurable time windows to synthesize cohesive Security Incidents.
-- **LangGraph RAG State Machine**: Executes stateful 5-node investigation workflows (Query Understanding → Evidence Retrieval → Context Filtering → MITRE Mapping → Evidence-Grounded Response).
-- **Evidence Citation & Confidence Scoring**: Every AI recommendation cites explicit event logs, knowledge base playbooks, and threat intelligence records with relevance scores.
-- **MITRE ATT&CK Matrix Mapping**: Maps command lines, hashes, and network traffic to ATT&CK tactics (e.g., T1059.001 PowerShell, T1003.001 LSASS dumping, T1071.001 C2 Web Protocols).
-- **Analyst Action & Audit Trail**: Enables analysts to execute host isolation or credential reset playbooks with audit logging.
-- **Modern Dark-Theme Web UI**: Responsive Next.js 14 App Router layout with a fixed left navigation sidebar, clean right-hand workspace, visual attack chain timeline, and 1-click synthetic attack simulator.
+**RAG retrieves knowledge. It does not train or fine-tune a model.** Analyst feedback is stored for review only.
 
 ---
 
-## 2. High-Level System Architecture
-
-```mermaid
-graph TD
-    subgraph Frontend ["Next.js 14 Web Application (:3000)"]
-        Dashboard["SOC Telemetry Dashboard"]
-        AlertQueue["Alert Management & Triage Queue"]
-        IncidentWS["Incident Workspace & Attack Timeline"]
-        CopilotChat["AI Copilot RAG Workspace"]
-        MitreExplorer["MITRE ATT&CK Explorer"]
-        ThreatIntelUI["Threat Intel Lookup"]
-    end
-
-    subgraph Backend ["FastAPI Backend Services (:8000)"]
-        API["Versioned REST API /api/v1"]
-        AuthModule["JWT Auth & Security Middleware"]
-        IngestEngine["Event Ingestion & Normalizer"]
-        Correlator["Correlation Engine"]
-        ThreatIntel["Threat Intelligence Adapters"]
-        MitreMapper["MITRE ATT&CK Mapper"]
-        LangGraphWS["LangGraph RAG Workflow Machine"]
-    end
-
-    subgraph Storage ["Data Layer"]
-        PostgreSQL[("PostgreSQL 16 + pgvector (:5432)")]
-    end
-
-    Frontend <-->|REST API + CORS| API
-    API --> AuthModule
-    API --> IngestEngine
-    API --> Correlator
-    API --> ThreatIntel
-    API --> MitreMapper
-    API --> LangGraphWS
-
-    IngestEngine --> PostgreSQL
-    Correlator --> PostgreSQL
-    LangGraphWS --> PostgreSQL
-```
-
----
-
-## 3. Why Docker?
-
-Running an enterprise security AI copilot requires coordinating multiple interdependent infrastructure services:
-1. **PostgreSQL with `pgvector` extension** (`pgvector/pgvector:pg16`): Handles relational alert/incident tables as well as high-dimensional vector embeddings for RAG retrieval.
-2. **FastAPI Backend Service**: Runs event ingestion pipelines, correlation algorithms, and LangGraph state machines.
-3. **Next.js 14 Frontend Web Application**: Serves the web interface, timeline visualizations, and real-time triage controls.
-
-### Advantages of Docker Compose
-- **Zero Configuration Setup**: Starts PostgreSQL with `pgvector`, initializes database tables, compiles the Next.js app, and spins up the FastAPI server with a single command.
-- **Environment Parity**: Eliminates local environment mismatches (Python dependencies, Node versions, PostgreSQL C-extensions).
-- **Network Isolation**: Secure internal container networking allowing `frontend` → `backend` → `db` communication without exposing internal ports.
-
----
-
-## 4. Running with Docker Compose
-
-### Step 1: Start the System
-From the project root directory, run:
+## Run with Docker Compose
 
 ```bash
+cp .env.example .env
+# optional: set GEMINI_API_KEY, VT_API_KEY, OTX_API_KEY, LLM_PROVIDER
 docker-compose up --build
 ```
 
-Docker will build the backend and frontend containers, pull PostgreSQL with `pgvector`, wait for database healthchecks, and launch all services.
+- Frontend: http://localhost:3001
+- API: http://localhost:8000/api/v1
+- OpenAPI: http://localhost:8000/api/v1/docs
 
-### Access Endpoints
-- 🌐 **Frontend Web Application**: [http://localhost:3000](http://localhost:3000)
-- ⚙️ **Backend REST API**: [http://localhost:8000/api/v1](http://localhost:8000/api/v1)
-- 📖 **Interactive OpenAPI (Swagger) Docs**: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)
+Default logins (change in production):
 
----
+| Email | Password | Role |
+| --- | --- | --- |
+| analyst@aisoc.io | AnalystSOC123! | analyst |
+| admin@aisoc.io | AdminSOC123! | admin |
 
-## 5. Step-by-Step User Walkthrough & How to Use
+Both seeded users share `tenant_default`. Newly registered users get their own tenant.
 
-Follow this step-by-step walkthrough to perform an end-to-end security investigation:
-
-### Step 1: Access the SOC Dashboard
-Navigate to [http://localhost:3000](http://localhost:3000). You will see the main layout with:
-- **Left Sidebar**: Module navigation links (`SOC Dashboard`, `Alert Triage`, `Incidents Workspace`, `AI Copilot RAG`, `MITRE ATT&CK`, `Threat Intel Lookup`, `Knowledge & Audit`).
-- **Header**: Live telemetry status (`SOC Telemetry: Active`) and quick action buttons.
-- **Main Area**: Security Telemetry metrics (Normalized Events velocity, Active Alerts count, Correlated Incidents, Mean Time to Respond), Alert Severity Breakdown, and Urgent Security Alerts Queue.
-
-### Step 2: Inject a Synthetic Attack Scenario
-Click the **"Simulate Attack Scenario"** (or **"Ingest Attack Scenario"**) button in the top right header.
-- **What Happens**: The backend generates a multi-stage attack sequence:
-  1. *Phishing Email Delivery* (Link: `http://phish-payroll-update.net/login.php`)
-  2. *Encoded PowerShell Execution* (`powershell.exe -Enc ...` spawned by `WINWORD.EXE`)
-  3. *LSASS Credential Dump* (`rundll32.exe comsvcs.dll MiniDump` targeting `lsass.exe`)
-  4. *Outbound TLS C2 Beaconing* (Connection to `198.51.100.44:443`)
-- The correlation engine automatically links these alerts to asset **`WORKSTATION-089`** and aggregates them into a **Critical Incident**.
-
-### Step 3: Triage Alerts in the Alert Queue
-Navigate to **Alert Triage** (`/alerts`) via the left sidebar:
-- **Filter**: Filter by Severity (`Critical`, `High`, `Medium`, `Low`) or Source (`EDR`, `Firewall`, `Identity`, `DNS`).
-- **Update Status**: Change an alert's status dropdown (e.g. `New` → `Acknowledged` → `Investigating`).
-- **Inspect Details**: Click **"Details"** on any alert to view the detection rule name, target host, and multi-source correlation reason.
-- **Launch AI Triage**: Click **"AI Triage"** to jump directly into the AI Copilot RAG interface with pre-loaded alert query context.
-
-### Step 4: Investigate Attack Chains in the Incident Workspace
-Navigate to **Incidents Workspace** (`/incidents`):
-- **Visual Attack Timeline**: Trace chronological events from initial phishing delivery through command execution to LSASS dumping and C2 beaconing.
-- **Indicators of Compromise (IOCs)**: View linked malicious IPs (`198.51.100.44`) and domains (`c2-command-node.ru`).
-- **Execute Containment Actions**: Under **Analyst Response Playbook**, click **"Execute Containment"** (e.g., *Isolate WORKSTATION-089 from Network* or *Reset User Credentials*) with audit logging.
-
-### Step 5: Query the Evidence-Grounded AI Copilot
-Navigate to **AI Copilot RAG** (`/copilot`):
-- **Ask Natural Language Questions**: Type custom queries or select preset prompts (e.g., *"Explain LSASS memory dump alert on WORKSTATION-089 and give containment steps"*).
-- **Review RAG Investigation Output**:
-  - **Executive Summary & Key Findings**: High-level incident synthesis.
-  - **Mapped MITRE Techniques**: Technique codes (e.g., `T1059.001`, `T1003.001`, `T1071.001`) with raw evidence snippets.
-  - **Grounded Evidence Citations**: Direct links to raw log event IDs, threat intel scores, and vectorized playbook chunks with relevance scores.
-  - **Confidence Level**: Overall confidence calculation.
-- **Provide Feedback**: Click **Useful** or **Needs Improvement** to log analyst feedback.
-
-### Step 6: Explore MITRE Matrix & Threat Intel Lookup
-- **MITRE ATT&CK Matrix** (`/mitre`): View tactics columns (*Initial Access*, *Execution*, *Persistence*, *Credential Access*, *C2*) with color-coded severity badges for observed techniques.
-- **Threat Intel Lookup** (`/indicators`): Search IP addresses, domains, or file hashes to view VirusTotal/OTX risk scores, threat actor attributions, and raw enrichment feeds.
+Set `ENVIRONMENT=production` to disable demo seeding (`/events/seed-demo`, `/events/simulate-scenario`, `/knowledge/seed-playbooks`).
 
 ---
 
-## 6. Post-Docker Operations & Manual Tasks Guide
+## Required environment variables
 
-### What Happens Automatically on Container Startup?
-- **Database Initialization**: On startup, FastAPI runs lifespan hooks (`app/core/init_db.py`) that create all SQL tables and seed default admin/analyst user credentials.
-- **Default Database Connection**: Automatically connects to the PostgreSQL container at `postgresql://ai_soc_user:12410279@db:5432/ai_soc_db`.
+See `.env.example`. Important keys:
+
+| Variable | Purpose | If missing |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL or SQLite | App will not start |
+| `SECRET_KEY` | JWT signing | Use a unique value in production |
+| `INGEST_WEBHOOK_TOKENS` | `source_id:token` pairs for webhook ingest | Webhook returns 404/401 |
+| `EMBEDDING_PROVIDER` | `mock` (offline hash, labeled) or `gemini` | `gemini` without `GEMINI_API_KEY` errors; no silent semantic fallback |
+| `GEMINI_API_KEY` | Semantic embeddings and optional Gemini LLM | Offline hash retrieval / no LLM summary |
+| `GEMINI_MODEL` | Gemini model for summaries (must be one your key can access) | Tries the next alias in a fallback chain (`gemini-3.5-flash`, `gemini-flash-latest`) on a retired-model `404`, a transient capacity `503`, an invalid request `400`, or a request `timeout`; if all fail, a template summary is used and `llm_used` stays `false`. Google retires model names over time — list live ones with `GET https://generativelanguage.googleapis.com/v1beta/models` |
+| `LLM_PROVIDER` | `mock`, `gemini`, `openai`, `ollama` | Summaries use evidence templates and disclose that no LLM was used |
+| `OPENAI_API_KEY` | OpenAI summaries when `LLM_PROVIDER=openai` | LLM not used |
+| `VT_API_KEY` / `OTX_API_KEY` | Live IOC enrichment | Lookup status `not_configured`; never shown as clean |
+| `TI_CACHE_TTL_MINUTES` | IOC cache expiry | Default 60 |
+| `ENABLE_DEMO_SEEDING` | Dev-only simulated scenarios | Forced off when `ENVIRONMENT=production` |
+
+Never put API keys in source, the browser bundle, or logs.
 
 ---
 
-### What Needs to Be Done / Run Manually?
+## Connect a real data source
 
-#### A. Running Backend Unit & Integration Tests
-To execute the Pytest suite manually outside Docker:
+Splunk, Elastic, Microsoft Sentinel, and EDR **pollers are not implemented**. Do not configure those products in this repo and expect them to work.
+
+Use the source-agnostic webhook:
+
+```http
+POST /api/v1/ingest/webhook/webhook-default
+X-Ingest-Token: dev-ingest-token
+X-Tenant-Id: tenant_default
+Content-Type: application/json
+```
+
+Body may be a single object, an array, or `{"events":[...]}`.
+
+Authenticated analysts can also `POST /api/v1/events/ingest` with a JSON/JSONL/CSV file.
+
+**Real source example (Windows host).** `scripts/windows-event-forwarder.ps1` reads genuine local telemetry (Windows Defender + PowerShell operational logs, and the Security log when run elevated) and forwards it to the webhook:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-event-forwarder.ps1 `
+  -BaseUrl http://127.0.0.1:8000/api/v1 -SourceId webhook-default -Token dev-ingest-token
+```
+
+Schedule it as a Windows Scheduled Task for near-real-time intake. This is a real data source (your own host) — it does not fabricate events.
+
+If nothing is connected, the UI shows **No source connected / waiting for data**. The product does not invent live alerts.
+
+Header status polls `/api/v1/ingest/status` every five seconds (`last_event_at`, connection state). `GET /api/v1/ingest/stream` is an optional SSE feed for clients that can send a bearer token.
+
+### Event schema (normalized)
+
+| Field | Notes |
+| --- | --- |
+| `event_id` | Client id; duplicates per tenant are rejected (idempotent) |
+| `timestamp` | ISO-8601; future >24h or older than `MAX_EVENT_AGE_DAYS` rejected |
+| `source` | `edr`, `firewall`, `identity`, `dns`, `email_gateway`, … |
+| `event_type` | e.g. `process_creation`, `network_conn` |
+| `severity` | `low` `medium` `high` `critical` |
+| `hostname`, `user`, `src_ip`, `dst_ip`, `src_port`, `dst_port` | Entities used for correlation |
+| `domain`, `process_name`, `command_line`, `file_hash` | Detection / MITRE evidence |
+| `raw_data` | Original text or JSON string |
+
+Common SIEM/EDR aliases (`@timestamp`, `host.name`, `process.command_line`, `source.ip`, …) are flattened into this schema. That is field mapping only, not a vendor integration.
+
+After ingest, detection rules create alerts; the correlation engine groups alerts that share host, user, or IP inside `CORRELATION_WINDOW_MINUTES`. Each alert stores why it was linked.
+
+---
+
+## Knowledge, MITRE, and threat intel
+
+- **Upload** playbooks on Knowledge & Audit (title, source, owner, version, content). Retrieval is tenant-isolated.
+- **Sync CISA KEV**: public catalog, stored with source URL and retrieval time; repeatable without duplicate titles.
+- **Sync MITRE ATT&CK**: enterprise STIX from mitre-attack; techniques stored with source URL and version. Until sync succeeds, a labeled bundled subset is used.
+- **Re-index vectors** after changing `EMBEDDING_PROVIDER`.
+- **IOC lookup**: VirusTotal and/or OTX when keys exist. UI shows provider, lookup time, cache expiry, and `unknown` / `not_found` / `provider_unavailable` / `not_configured`.
+
+---
+
+## Local development without Docker
+
 ```bash
-# Ensure Python dependencies are installed in backend
-pip install -r backend/requirements.txt
+# backend
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 
-# Run test suite
-pytest backend/tests
+# frontend
+cd frontend
+npm install
+npm run dev
 ```
-*Expected Output*: `16 passed`
 
-#### B. Running Quantitative Evaluation Benchmark
-To run the ground-truth benchmark suite evaluating investigation latency, alert triage F1, correlation F1, and MITRE mapping accuracy:
+Frontend defaults to `http://localhost:8000/api/v1`. Docker frontend is published on port 3001.
+
+### Tests
+
 ```bash
-python backend/eval/eval_benchmark.py
+cd backend
+pytest tests
 ```
-*Expected Output*: Benchmarking report JSON with **1.0 F1 score** and **~440ms latency improvement**.
 
-#### C. Local Development Without Docker (Optional)
-If you prefer running components individually without Docker:
+External APIs are mocked. Real credentials are not required.
 
-1. **Start Backend**:
-   ```bash
-   cd backend
-   uvicorn app.main:app --reload --port 8000
-   ```
-2. **Start Frontend**:
-   ```bash
-   cd frontend
-   npm run dev
-   ```
+```bash
+cd frontend
+npx tsc --noEmit
+```
 
 ---
 
-## 7. Project Directory Structure
+## What remains unavailable until you configure it
 
-```
-ai-soc-copilot/
-├── backend/
-│   ├── app/
-│   │   ├── api/endpoints/   # Auth, Alerts, Incidents, Copilot, MITRE, Indicators, Feedback
-│   │   ├── core/            # Config, DB connection, JWT auth, logging
-│   │   ├── models/          # SQLAlchemy ORM models (Event, Alert, Incident, Indicator, Knowledge)
-│   │   ├── schemas/         # Pydantic V2 validation schemas
-│   │   ├── services/        # Ingestion, Correlation, ThreatIntel, Vector, RAG, LangGraph
-│   │   └── main.py          # FastAPI application entrypoint
-│   ├── eval/                # Quantitative benchmark script & dataset
-│   ├── tests/               # Pytest integration suite
-│   ├── Dockerfile           # Backend container build script
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── app/             # Next.js 14 App Router pages (Dashboard, Alerts, Incidents, Copilot, MITRE, Intel)
-│   │   ├── components/      # UI components (Navigation, Badges, StatCards)
-│   │   ├── lib/             # API client & fallback simulation engine
-│   │   └── styles/          # Tailwind CSS design system tokens
-│   ├── Dockerfile           # Next.js multi-stage build script
-│   └── package.json
-├── docker-compose.yml       # Orchestration manifest
-├── .env.example
-└── README.md
-```
+| Capability | Status |
+| --- | --- |
+| Live event flow | Needs webhook or file ingest (or explicit **dev** simulate) |
+| Semantic RAG | `EMBEDDING_PROVIDER=gemini` and `GEMINI_API_KEY` |
+| LLM narrative summaries | `LLM_PROVIDER` plus matching API key |
+| Live IOC reputation | `VT_API_KEY` and/or `OTX_API_KEY` |
+| Full ATT&CK catalog | Run **Sync MITRE ATT&CK** |
+| Splunk / Elastic / Sentinel / EDR pollers | **Not implemented** |
+| Automatic containment | **Not implemented** (approval records only) |
+| Model training from feedback | **Not implemented** |
+
+---
+
+## Demo mode (development only)
+
+`Simulate Attack` / `seed-demo` generates **labeled simulated** events and runs the same detect/correlate path. Disabled when `ENVIRONMENT=production`.

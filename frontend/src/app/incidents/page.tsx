@@ -27,6 +27,9 @@ import {
   getIndicators,
   triggerCorrelation,
   seedDemoScenario,
+  updateIncident,
+  approveIncidentRecommendation,
+  getIngestStatus,
   IncidentItem,
   IndicatorItem
 } from '@/lib/api';
@@ -40,6 +43,8 @@ export default function IncidentsPage() {
   const [seeding, setSeeding] = useState(false);
   const [correlating, setCorrelating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [demoEnabled, setDemoEnabled] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -70,6 +75,9 @@ export default function IncidentsPage() {
 
   useEffect(() => {
     loadData();
+    getIngestStatus()
+      .then((s) => setDemoEnabled(s?.demo_seeding_enabled === true))
+      .catch(() => {});
   }, []);
 
   const handleSeed = async () => {
@@ -103,9 +111,31 @@ export default function IncidentsPage() {
     }
   };
 
-  const handleExecuteAction = (actionTitle: string) => {
-    if (!executedActions.includes(actionTitle)) {
-      setExecutedActions([...executedActions, actionTitle]);
+  const handleApprove = async (index: number) => {
+    if (!activeIncident) return;
+    setUpdating(true);
+    try {
+      const updated = await approveIncidentRecommendation(activeIncident.id, index);
+      setActiveIncident(updated);
+      setIncidents((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+    } catch (e: any) {
+      setError(e?.message || 'Approval failed');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleStatus = async (status: string) => {
+    if (!activeIncident) return;
+    setUpdating(true);
+    try {
+      const updated = await updateIncident(activeIncident.id, { status });
+      setActiveIncident(updated);
+      setIncidents((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+    } catch (e: any) {
+      setError(e?.message || 'Update failed');
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -150,14 +180,16 @@ export default function IncidentsPage() {
             {correlating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
             {correlating ? 'Correlating...' : 'Run Correlation'}
           </button>
-          <button
-            onClick={handleSeed}
-            disabled={seeding || correlating || loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-xs font-medium transition-all shadow-rose-glow disabled:opacity-50"
-          >
-            {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-            {seeding ? 'Seeding...' : 'Seed Demo Attack'}
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSeed}
+              disabled={seeding || correlating || loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-xs font-medium transition-all shadow-rose-glow disabled:opacity-50"
+            >
+              {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+              {seeding ? 'Seeding...' : 'Seed Attack (dev)'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -179,18 +211,19 @@ export default function IncidentsPage() {
           <div>
             <h3 className="text-lg font-semibold text-white">No Incidents Detected Yet</h3>
             <p className="text-sm text-soc-textMuted mt-1 max-w-md mx-auto leading-relaxed">
-              The correlation engine analyzes alerts to find multi-stage attack patterns and group them into incidents.
-              Seed a synthetic multi-stage attack scenario to walk through the full incident response workflow.
+              No incidents yet. Incidents are created from correlated alerts after events are ingested. This view does not invent live cases.
             </p>
           </div>
-          <button
-            onClick={handleSeed}
-            disabled={seeding}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-sm font-medium transition-all shadow-rose-glow disabled:opacity-50 inline-flex items-center gap-2"
-          >
-            {seeding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-            {seeding ? 'Seeding Attack Scenario...' : 'Seed Demo Attack & Create Incident'}
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSeed}
+              disabled={seeding}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-sm font-medium transition-all shadow-rose-glow disabled:opacity-50 inline-flex items-center gap-2"
+            >
+              {seeding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {seeding ? 'Seeding scenario...' : 'Seed Attack (dev)'}
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -223,9 +256,9 @@ export default function IncidentsPage() {
                   >
                     <div className="flex items-start justify-between gap-2">
                       <SeverityBadge severity={inc.severity} />
-                      <span className="text-[10px] font-mono text-soc-textMuted shrink-0 mt-0.5">
+                      {/* <span className="text-[10px] font-mono text-soc-textMuted shrink-0 mt-0.5">
                         {inc.id}
-                      </span>
+                      </span> */}
                     </div>
                     <h4 className="font-semibold text-sm text-white leading-snug line-clamp-2">
                       {inc.title}
@@ -263,6 +296,24 @@ export default function IncidentsPage() {
                       </span>
                     </div>
                     <h2 className="text-xl font-bold text-white leading-tight">{activeIncident.title}</h2>
+                    {/* {activeIncident.is_simulated === 'true' && (
+                      <span className="text-[10px] font-mono text-amber-300">SIMULATED RECORD</span>
+                    )} */}
+                    {activeIncident.severity_rationale && (
+                      <p className="text-xs text-soc-textMuted mt-1">{activeIncident.severity_rationale}</p>
+                    )}
+                    <div className="flex gap-2 pt-2">
+                      {['new', 'investigating', 'closed'].map((st) => (
+                        <button
+                          key={st}
+                          disabled={updating}
+                          onClick={() => handleStatus(st)}
+                          className="px-2 py-1 rounded border border-soc-cardBorder text-[10px] uppercase text-soc-textMuted hover:text-white"
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   <Link
@@ -288,14 +339,28 @@ export default function IncidentsPage() {
                 {activeIncident.mitre_techniques && activeIncident.mitre_techniques.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-2 pt-2">
                     <span className="text-xs text-soc-textMuted font-medium">Mapped MITRE Techniques:</span>
-                    {activeIncident.mitre_techniques.map((tech) => (
-                      <span
-                        key={tech}
-                        className="px-2.5 py-1 rounded-lg bg-rose-950/50 text-rose-300 border border-rose-800/40 text-xs font-mono font-semibold"
-                      >
-                        {tech}
-                      </span>
-                    ))}
+                    {activeIncident.mitre_techniques.map((tech) => {
+                      const mapping = (activeIncident.mitre_mappings || []).find(
+                        (m: any) => m.technique_id === tech
+                      );
+                      return (
+                        <span
+                          key={tech}
+                          title={mapping?.rationale || 'Candidate mapping pending analyst confirmation.'}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/50 text-rose-300 border border-rose-800/40 text-xs"
+                        >
+                          <span className="font-mono font-semibold">{tech}</span>
+                          {mapping?.name && (
+                            <span className="text-rose-200/80 font-normal">{mapping.name}</span>
+                          )}
+                          {typeof mapping?.confidence === 'number' && (
+                            <span className="font-mono text-[10px] text-rose-400/70">
+                              {Math.round(mapping.confidence * 100)}%
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 pt-2">
@@ -314,36 +379,104 @@ export default function IncidentsPage() {
 
                 {activeIncident.timeline_json && activeIncident.timeline_json.length > 0 ? (
                   <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-gradient-to-b before:from-cyan-500 before:via-amber-500 before:to-rose-500">
-                    {activeIncident.timeline_json.map((item, index) => (
-                      <div key={index} className="relative group">
-                        <span
-                          className={`absolute -left-6 top-1 w-4 h-4 rounded-full border-2 bg-soc-card ${
-                            item.severity === 'critical'
-                              ? 'border-rose-500 shadow-rose-glow'
-                              : item.severity === 'high'
-                              ? 'border-amber-500 shadow-amber-glow'
-                              : 'border-cyan-500 shadow-cyan-glow'
-                          }`}
-                        />
-                        <div className="p-4 rounded-xl bg-soc-sidebar/80 border border-soc-cardBorder group-hover:border-cyan-500/40 transition-all space-y-1.5">
-                          <div className="flex items-center justify-between flex-wrap gap-2">
-                            <span className="font-semibold text-sm text-white">{item.title}</span>
-                            <span className="text-[11px] font-mono text-soc-textMuted">
-                              {new Date(item.timestamp).toLocaleTimeString()}
-                            </span>
-                          </div>
-                          <p className="text-xs text-soc-textMuted leading-relaxed">{item.description}</p>
-                          <div className="flex items-center gap-3 text-[11px] font-mono pt-1 flex-wrap">
-                            <span className="text-soc-textMuted">
-                              Source: <strong className="text-cyan-400">{item.source}</strong>
-                            </span>
-                            <span className="text-soc-textMuted">
-                              Event: <strong className="text-amber-400">{item.event_type}</strong>
-                            </span>
+                    {activeIncident.timeline_json.map((item, index) => {
+                      const isAnalyst = item.kind === 'analyst_action';
+                      const dotCls = isAnalyst
+                        ? 'border-emerald-500 shadow-emerald-glow'
+                        : item.severity === 'critical'
+                        ? 'border-rose-500 shadow-rose-glow'
+                        : item.severity === 'high'
+                        ? 'border-amber-500 shadow-amber-glow'
+                        : 'border-cyan-500 shadow-cyan-glow';
+                      const originParts = item.origin
+                        ? ([
+                            item.origin.provider,
+                            item.origin.windows_event_id != null
+                              ? `Event ${item.origin.windows_event_id}`
+                              : null,
+                            item.origin.record_id ? `Record ${item.origin.record_id}` : null,
+                          ].filter(Boolean) as string[])
+                        : [];
+                      const originLabel =
+                        originParts.length > 0 ? originParts.join(' · ') : item.origin?.event_ref;
+                      return (
+                        <div key={index} className="relative group">
+                          <span
+                            className={`absolute -left-6 top-1 w-4 h-4 rounded-full border-2 bg-soc-card ${dotCls}`}
+                          />
+                          <div
+                            className={`p-4 rounded-xl border transition-all space-y-1.5 ${
+                              isAnalyst
+                                ? 'bg-emerald-950/30 border-emerald-800/40'
+                                : 'bg-soc-sidebar/80 border-soc-cardBorder group-hover:border-cyan-500/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {item.stage && (
+                                  <span
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide border ${
+                                      isAnalyst
+                                        ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/40'
+                                        : item.stage === 'Unmapped activity'
+                                        ? 'bg-soc-card text-soc-textMuted border-soc-cardBorder'
+                                        : 'bg-cyan-950/60 text-cyan-300 border-cyan-800/40'
+                                    }`}
+                                  >
+                                    {item.stage}
+                                  </span>
+                                )}
+                                <span className="font-semibold text-sm text-white">{item.title}</span>
+                              </div>
+                              <span className="text-[11px] font-mono text-soc-textMuted">
+                                {new Date(item.timestamp).toLocaleString()}
+                              </span>
+                            </div>
+                            {item.technique_id && (
+                              <div className="text-[11px] font-mono text-rose-300/90">
+                                {item.technique_id}
+                                {item.technique_name ? ` · ${item.technique_name}` : ''}
+                                {typeof item.confidence === 'number'
+                                  ? ` · ${Math.round(item.confidence * 100)}%`
+                                  : ''}
+                              </div>
+                            )}
+                            {(item.occurrences || 1) > 1 && item.first_seen && item.last_seen && (
+                              <div className="flex items-center gap-2 text-[11px] font-mono text-amber-400/90">
+                                <span className="px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/40">
+                                  x{item.occurrences}
+                                </span>
+                                <span>
+                                  {new Date(item.first_seen).toLocaleTimeString()} →{' '}
+                                  {new Date(item.last_seen).toLocaleTimeString()}
+                                </span>
+                              </div>
+                            )}
+                            {item.description && (
+                              <p className="text-xs text-soc-textMuted leading-relaxed break-words">
+                                {item.description}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-3 text-[11px] font-mono pt-1 flex-wrap">
+                              <span className="text-soc-textMuted">
+                                Source:{' '}
+                                <strong className={isAnalyst ? 'text-emerald-400' : 'text-cyan-400'}>
+                                  {item.source}
+                                </strong>
+                              </span>
+                              <span className="text-soc-textMuted">
+                                Event: <strong className="text-amber-400">{item.event_type}</strong>
+                              </span>
+                              {originLabel && (
+                                <span className="text-soc-textMuted">
+                                  Origin: <strong className="text-white/80">{originLabel}</strong>
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-10">
@@ -364,13 +497,13 @@ export default function IncidentsPage() {
                 <div className="glass-panel p-6 rounded-2xl border border-soc-cardBorder space-y-4">
                   <h3 className="text-base font-semibold text-white flex items-center space-x-2">
                     <Zap className="w-5 h-5 text-amber-400" />
-                    <span>Analyst Response Playbook</span>
+                    <span>Recommended Actions (approval only — no containment is executed)</span>
                   </h3>
 
                   {activeIncident.recommendations_json && activeIncident.recommendations_json.length > 0 ? (
                     <div className="space-y-3">
                       {activeIncident.recommendations_json.map((rec, idx) => {
-                        const isExecuted = executedActions.includes(rec.title);
+                        const isExecuted = Boolean((rec as any).approved) || executedActions.includes(rec.title);
                         return (
                           <div
                             key={idx}
@@ -405,14 +538,15 @@ export default function IncidentsPage() {
                               {isExecuted ? (
                                 <div className="flex items-center space-x-1 text-emerald-400 font-semibold text-xs">
                                   <CheckCircle2 className="w-4 h-4" />
-                                  <span>Executed & Logged</span>
+                                  <span>Approved (not executed by this platform)</span>
                                 </div>
                               ) : (
                                 <button
-                                  onClick={() => handleExecuteAction(rec.title)}
-                                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-medium text-xs shadow-rose-glow transition-all"
+                                  onClick={() => handleApprove(idx)}
+                                  disabled={updating}
+                                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-medium text-xs shadow-rose-glow transition-all disabled:opacity-50"
                                 >
-                                  Execute Containment
+                                  Approve recommendation
                                 </button>
                               )}
                             </div>
@@ -441,14 +575,31 @@ export default function IncidentsPage() {
                   {indicators.length > 0 ? (
                     <div className="space-y-2.5">
                       {indicators.slice(0, 8).map((ind) => {
+                        const enriched = ind.lookup_status === 'ok';
                         const severity =
-                          ind.risk_level === 'critical' || ind.risk_level === 'high' ? 'high' : ind.risk_level === 'medium' ? 'med' : 'low';
+                          enriched && (ind.risk_level === 'critical' || ind.risk_level === 'high')
+                            ? 'high'
+                            : enriched && ind.risk_level === 'medium'
+                            ? 'med'
+                            : 'low';
                         const badgeCls =
-                          severity === 'high'
+                          !enriched
+                            ? 'bg-soc-card text-soc-textMuted border-soc-cardBorder'
+                            : severity === 'high'
                             ? 'bg-rose-950 text-rose-300 border-rose-800/40'
                             : severity === 'med'
                             ? 'bg-amber-950 text-amber-300 border-amber-800/40'
                             : 'bg-cyan-950 text-cyan-300 border-cyan-800/40';
+                        const scoreLabel =
+                          ind.lookup_status === 'not_configured'
+                            ? 'no provider'
+                            : ind.lookup_status === 'provider_unavailable'
+                            ? 'provider down'
+                            : ind.lookup_status === 'not_found'
+                            ? 'not found'
+                            : enriched
+                            ? `${ind.reputation_score}/100`
+                            : 'not enriched';
                         return (
                           <Link
                             key={ind.id}
@@ -461,7 +612,9 @@ export default function IncidentsPage() {
                                   {ind.indicator_type}
                                 </span>
                                 <div className={`font-mono font-bold text-xs mt-0.5 break-all ${
-                                  ind.risk_level === 'critical' || ind.risk_level === 'high'
+                                  !enriched
+                                    ? 'text-soc-textMuted'
+                                    : ind.risk_level === 'critical' || ind.risk_level === 'high'
                                     ? 'text-rose-400'
                                     : ind.risk_level === 'medium'
                                     ? 'text-amber-400'
@@ -473,7 +626,7 @@ export default function IncidentsPage() {
                                 </div>
                               </div>
                               <span className={`px-2 py-0.5 rounded border text-[11px] font-mono shrink-0 ${badgeCls}`}>
-                                {ind.reputation_score}/100
+                                {scoreLabel}
                               </span>
                             </div>
                           </Link>

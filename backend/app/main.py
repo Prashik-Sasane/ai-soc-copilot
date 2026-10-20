@@ -9,7 +9,8 @@ from app.core.config import settings
 from app.core.database import SessionLocal, engine
 from app.core.init_db import init_db
 from app.core.logging import logger
-from app.api.endpoints import auth, dashboard, events, alerts, incidents, indicators, copilot, knowledge, mitre, feedback
+from app.core.request_context import set_request_id
+from app.api.endpoints import auth, dashboard, events, alerts, incidents, indicators, copilot, knowledge, mitre, feedback, ingest
 
 
 def _wait_for_db_ready(max_retries: int = 20, retry_delay: float = 2.0):
@@ -63,7 +64,8 @@ app.add_middleware(
 
 @app.middleware("http")
 async def add_security_headers_and_logging(request: Request, call_next):
-    request_id = str(uuid.uuid4())
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    set_request_id(request_id)
     start_time = time.time()
     
     response = await call_next(request)
@@ -91,6 +93,7 @@ app.include_router(copilot.router, prefix=f"{settings.API_V1_STR}/copilot", tags
 app.include_router(knowledge.router, prefix=f"{settings.API_V1_STR}/knowledge", tags=["knowledge"])
 app.include_router(mitre.router, prefix=f"{settings.API_V1_STR}/mitre", tags=["mitre"])
 app.include_router(feedback.router, prefix=f"{settings.API_V1_STR}", tags=["feedback_audit"])
+app.include_router(ingest.router, prefix=f"{settings.API_V1_STR}/ingest", tags=["ingest"])
 
 
 @app.get("/healthz")

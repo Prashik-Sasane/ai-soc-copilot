@@ -2,6 +2,17 @@ import sys
 import os
 from pathlib import Path
 
+# Force deterministic, offline settings BEFORE the app/config module is imported.
+# The test suite must never require real credentials or make external network calls,
+# even when a developer's local .env configures live providers.
+os.environ["ENVIRONMENT"] = "test"
+os.environ["ENABLE_DEMO_SEEDING"] = "true"
+os.environ["LLM_PROVIDER"] = "mock"
+os.environ["EMBEDDING_PROVIDER"] = "mock"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["VT_API_KEY"] = ""
+os.environ["OTX_API_KEY"] = ""
+
 # Add backend directory to sys.path
 backend_dir = str(Path(__file__).parent.parent.resolve())
 if backend_dir not in sys.path:

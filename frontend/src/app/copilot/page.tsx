@@ -27,6 +27,7 @@ import {
   CopilotResponse,
   submitFeedback,
   getCopilotHistory,
+  getIngestStatus,
   seedDemoScenario,
   seedKnowledgePlaybooks
 } from '@/lib/api';
@@ -46,6 +47,7 @@ function CopilotContent() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [demoEnabled, setDemoEnabled] = useState(false);
 
   const presetQueries = [
     'Explain LSASS memory dump alert on WORKSTATION-089 and give containment steps.',
@@ -119,6 +121,12 @@ function CopilotContent() {
   };
 
   useEffect(() => {
+    getIngestStatus()
+      .then((s) => setDemoEnabled(s?.demo_seeding_enabled === true))
+      .catch(() => setDemoEnabled(false));
+  }, []);
+
+  useEffect(() => {
     const q = searchParams.get('query');
     const aId = searchParams.get('alert_id');
     const iId = searchParams.get('incident_id');
@@ -141,7 +149,7 @@ function CopilotContent() {
             <span>AI Copilot & Evidence-Grounded RAG Workspace</span>
           </h1>
           <p className="text-sm text-soc-textMuted mt-1">
-            Ask questions in natural language. Powered by LangGraph state machine, vector search (pgvector), and playbooks.
+            RAG retrieves tenant-isolated knowledge for citations. It does not train or fine-tune a model. LLM summaries run only when an API key is configured.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -160,14 +168,16 @@ function CopilotContent() {
               </span>
             )}
           </button>
-          <button
-            onClick={handleSeedDemo}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-medium transition-all shadow-purple-glow disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lightbulb className="w-3.5 h-3.5" />}
-            Run Full Demo
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSeedDemo}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-medium transition-all shadow-purple-glow disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lightbulb className="w-3.5 h-3.5" />}
+              Run Simulated Demo
+            </button>
+          )}
         </div>
       </div>
 
@@ -315,6 +325,12 @@ function CopilotContent() {
                 <span className="text-xs text-soc-textMuted font-mono">Confidence:</span>
                 <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-mono font-bold">
                   {Math.round((response.confidence || 0) * 100)}%
+                </span>
+                <span className="px-2 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-[10px] font-mono text-soc-textMuted">
+                  LLM: {response.llm_used ? 'configured provider' : 'not used'}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-[10px] font-mono text-soc-textMuted">
+                  Embeddings: {response.embedding_mode === 'semantic' ? 'semantic' : 'offline/demo hash'}
                 </span>
               </div>
             </div>
@@ -481,7 +497,7 @@ function CopilotContent() {
           {/* Analyst Feedback Section */}
           <div className="glass-panel p-4 rounded-2xl border border-soc-cardBorder flex flex-wrap items-center justify-between gap-3 text-xs">
             <span className="text-soc-textMuted font-medium">
-              Was this AI investigation helpful to your workflow?
+              Was this investigation helpful? Feedback is stored for review and does not train a model.
             </span>
             <div className="flex items-center space-x-2">
               <button

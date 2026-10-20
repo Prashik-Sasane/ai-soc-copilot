@@ -34,6 +34,11 @@ class IncidentRead(BaseModel):
     alert_ids: List[str] = []
     indicator_ids: List[str] = []
     mitre_techniques: List[str] = []
+    mitre_mappings: Optional[List[Dict[str, Any]]] = None
+    severity_rationale: Optional[str] = None
+    affected_assets: Optional[List[str]] = None
+    affected_users: Optional[List[str]] = None
+    change_history_json: Optional[List[Dict[str, Any]]] = None
     
     timeline_json: List[Dict[str, Any]] = []
     recommendations_json: List[Dict[str, Any]] = []

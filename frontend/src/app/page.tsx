@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import StatCard from '@/components/StatCard';
 import SeverityBadge from '@/components/SeverityBadge';
-import { getDashboardStats, getAlerts, triggerSyntheticScenario, AlertItem } from '@/lib/api';
+import { getDashboardStats, getAlerts, triggerSyntheticScenario, getIngestStatus, AlertItem } from '@/lib/api';
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [demoEnabled, setDemoEnabled] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -44,6 +45,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchData();
+    getIngestStatus()
+      .then((s) => setDemoEnabled(s?.demo_seeding_enabled === true))
+      .catch(() => setDemoEnabled(false));
   }, []);
 
   const handleSimulate = async () => {
@@ -81,7 +85,7 @@ export default function DashboardPage() {
             </span>
           </div>
           <p className="text-sm text-soc-textMuted mt-1">
-            Real-time multi-source security event correlation & AI-guided evidence triage
+            Alerts are generated when ingested events match detection rules. Replayed dataset alerts are labeled simulated.
           </p>
         </div>
 
@@ -94,14 +98,16 @@ export default function DashboardPage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={handleSimulate}
-            disabled={simulating}
-            className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-medium text-sm shadow-cyan-glow transition-all active:scale-95"
-          >
-            <Zap className={`w-4 h-4 ${simulating ? 'animate-spin' : ''}`} />
-            <span>{simulating ? 'Simulating...' : 'Ingest Attack Scenario'}</span>
-          </button>
+          {demoEnabled && (
+            <button
+              onClick={handleSimulate}
+              disabled={simulating}
+              className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-medium text-sm shadow-cyan-glow transition-all active:scale-95"
+            >
+              <Zap className={`w-4 h-4 ${simulating ? 'animate-spin' : ''}`} />
+              <span>{simulating ? 'Simulating...' : 'Simulate Attack (dev)'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -116,14 +122,14 @@ export default function DashboardPage() {
         <StatCard
           title="Normalized Events"
           value={loading ? '—' : (stats?.total_events ? stats.total_events.toLocaleString() : '0')}
-          subtitle={loading ? 'Loading telemetry...' : `${Math.floor((stats?.total_events || 0) / 10)} events/min estimate`}
+          subtitle={loading ? 'Loading telemetry...' : ((stats?.total_events || 0) === 0 ? 'Waiting for a connected source' : 'Stored normalized events')}
           icon={Activity}
           color="cyan"
         />
         <StatCard
           title="Active Alerts"
           value={loading ? '—' : (stats?.total_alerts || '0')}
-          subtitle={loading ? '' : `${sev.critical} Critical • ${sev.high} High`}
+          subtitle={loading ? '' : `${sev.critical} Critical • ${sev.high} High • ${sev.medium} Medium • ${sev.low} Low`}
           icon={AlertTriangle}
           color="amber"
         />
@@ -136,8 +142,8 @@ export default function DashboardPage() {
         />
         <StatCard
           title="MTTR (Mean Response)"
-          value={loading ? '—' : `${stats?.mean_time_to_respond_mins || '0.0'} min`}
-          subtitle={loading ? '' : 'RAG vector retrieval active'}
+          value={loading ? '—' : (stats?.mean_time_to_respond_mins != null ? `${stats.mean_time_to_respond_mins} min` : 'n/a')}
+          subtitle={loading ? '' : 'MTTR is computed from closed incidents only when available'}
           icon={Clock}
           color="emerald"
         />
@@ -207,16 +213,16 @@ export default function DashboardPage() {
 
           <div className="pt-4 border-t border-soc-cardBorder space-y-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-soc-textMuted">Correlation Engine Status</span>
-              <span className="text-emerald-400 font-mono">Active</span>
+              <span className="text-soc-textMuted">Ingestion</span>
+              <span className="text-amber-300 font-mono">Webhook ready · vendor pollers not implemented</span>
             </div>
             <div className="flex items-center justify-between text-xs">
-              <span className="text-soc-textMuted">RAG Vector Storage</span>
-              <span className="text-cyan-400 font-mono">pgvector Ready</span>
+              <span className="text-soc-textMuted">RAG</span>
+              <span className="text-cyan-400 font-mono">Retrieves knowledge; does not train a model</span>
             </div>
             <div className="flex items-center justify-between text-xs">
-              <span className="text-soc-textMuted">MITRE Mapping Service</span>
-              <span className="text-purple-400 font-mono">ATT&CK v14 Synced</span>
+              <span className="text-soc-textMuted">MITRE mapping</span>
+              <span className="text-purple-400 font-mono">Candidates until analyst confirms</span>
             </div>
           </div>
 
@@ -263,7 +269,7 @@ export default function DashboardPage() {
             </div>
           ) : alerts.length === 0 ? (
             <div className="py-12 text-center">
-              <p className="text-soc-textMuted text-sm">No alerts in queue. Click <strong>&quot;Ingest Attack Scenario&quot;</strong> to generate synthetic test data.</p>
+              <p className="text-soc-textMuted text-sm">No source connected / waiting for data. POST events to the authenticated webhook, or use Simulate Attack only in development.</p>
             </div>
           ) : (
             <div className="divide-y divide-soc-cardBorder">
