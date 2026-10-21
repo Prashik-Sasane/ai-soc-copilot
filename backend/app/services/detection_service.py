@@ -1,337 +1,162 @@
+"""Safe evaluator for versioned declarative detection rules."""
+import json
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.alert import Alert
+from app.models.detection_hit import DetectionHit
 from app.models.event import SecurityEvent
 from app.services.mitre_service import MitreService
+from app.services.risk_engine import CONFIDENCE_BY_POLICY, RiskEngine
+
+RULE_FILE = Path(__file__).resolve().parents[1] / "detection" / "rules.v1.json"
+OPS = {"all", "any", "event_type_in", "source_in", "text_any", "text_all", "text_none", "token_any", "process_or_command_has"}
+SEVERITIES = {"low", "medium", "high", "critical"}
 
 
 def _text(event: SecurityEvent) -> str:
-    parts = [
-        event.process_name or "",
-        event.command_line or "",
-        event.raw_data or "",
-        event.event_type or "",
-        event.domain or "",
-        event.file_hash or "",
-    ]
-    return " ".join(parts).lower()
+    return " ".join(filter(None, [event.process_name, event.command_line, event.raw_data,
+                                  event.event_type, event.domain, event.file_hash])).lower()
 
 
-def _phrase(text: str, phrase: str) -> bool:
-    return phrase in text
+def _validate(node: Any) -> None:
+    if not isinstance(node, dict) or len(node) != 1:
+        raise ValueError("Condition must be a single supported operator.")
+    op, value = next(iter(node.items()))
+    if op not in OPS:
+        raise ValueError(f"Unsupported condition operator: {op}")
+    if op in {"all", "any"}:
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"{op} requires conditions.")
+        for child in value:
+            _validate(child)
+    elif op == "process_or_command_has":
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{op} requires a string.")
+    elif not isinstance(value, list) or not value or not all(isinstance(v, str) and v for v in value):
+        raise ValueError(f"{op} requires a list of strings.")
 
 
-_TOKEN_PATTERNS: Dict[str, "re.Pattern[str]"] = {}
+def load_rules() -> tuple[str, List[Dict[str, Any]]]:
+    try:
+        config = json.loads(RULE_FILE.read_text(encoding="utf-8"))
+        version, rules = config["version"], config["rules"]
+        seen = set()
+        if set(config) != {"version", "rules"} or not isinstance(version, str) or not version or not isinstance(rules, list):
+            raise ValueError("Expected version and rules.")
+        for rule in rules:
+            required = {"id", "name", "title", "description", "base_severity", "source", "confidence_policy", "mitre", "conditions"}
+            if not isinstance(rule, dict) or not required.issubset(rule) or set(rule) != required:
+                raise ValueError("Rule missing required fields.")
+            if not isinstance(rule["id"], str) or not rule["id"] or rule["id"] in seen or rule["base_severity"] not in SEVERITIES:
+                raise ValueError(f"Duplicate ID or invalid severity: {rule.get('id')}")
+            if rule["confidence_policy"] not in CONFIDENCE_BY_POLICY:
+                raise ValueError(f"Unknown confidence policy in {rule['id']}.")
+            seen.add(rule["id"])
+            if not isinstance(rule["mitre"], list) or not all(re.fullmatch(r"T\d{4}(?:\.\d{3})?", str(t)) for t in rule["mitre"]):
+                raise ValueError(f"Invalid ATT&CK ID: {rule['id']}")
+            _validate(rule["conditions"])
+        return version, rules
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        # Fail closed; never turn a malformed rule into permissive matching.
+        raise RuntimeError(f"Detection rule configuration is invalid: {exc}") from exc
 
 
-def _has(text: str, token: str) -> bool:
-    """Whole-token match so short strings such as `c2` or the `-enc` switch cannot
-    match inside GUIDs, base64 blobs, or identifiers like `UTF8Encoding` / `-Encoding`.
-    Raw substring matching on these tokens produced false 'C2 egress' alerts on benign
-    PowerShell telemetry, so ambiguous tokens must be matched on token boundaries."""
-    pattern = _TOKEN_PATTERNS.get(token)
-    if pattern is None:
-        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])")
-        _TOKEN_PATTERNS[token] = pattern
-    return pattern.search(text) is not None
-
-
-def _has_any(text: str, tokens: List[str]) -> bool:
-    return any(_has(text, t) for t in tokens)
-
-
-def _defender_specific_signal(text: str) -> bool:
-    """True when a Defender status event carries a specific, higher-severity signal.
-    Used so the generic low-severity status rule does not double-report the same event."""
-    return (
-        _phrase(text, "configuration has changed")
-        or _phrase(text, "error trying to update security intelligence")
-        or (_phrase(text, "real-time protection") and _has_any(text, ["disabled", "turned off", "expired", "off"]))
-    )
-
-
-DETECTION_RULES: List[Dict[str, Any]] = [
-    # --- Endpoint antivirus (real Microsoft Defender / AV events) ---
-    {
-        "id": "DET_MALWARE_DETECTED",
-        "name": "Malware Detected by Endpoint AV",
-        "severity": "critical",
-        "source": "endpoint_av",
-        "title": "Endpoint antivirus detected malware",
-        "match": lambda e: (e.event_type or "") in {"malware_detection", "malware"},
-    },
-    {
-        "id": "DET_MALWARE_ACTION",
-        "name": "Endpoint AV Remediation Action",
-        "severity": "high",
-        "source": "endpoint_av",
-        "title": "Endpoint antivirus took action on a threat",
-        "match": lambda e: (e.event_type or "") == "malware_action",
-    },
-    {
-        "id": "DET_DEFENDER_PROTECTION_OFF",
-        "name": "Endpoint Protection Disabled",
-        "severity": "high",
-        "source": "endpoint_av",
-        "title": "Endpoint protection appears disabled or tampered",
-        "match": lambda e: _phrase(_text(e), "real-time protection")
-        and _has_any(_text(e), ["disabled", "turned off", "expired", "off"]),
-    },
-    {
-        "id": "DET_DEFENDER_CONFIG_CHANGE",
-        "name": "Endpoint Protection Configuration Change",
-        "severity": "medium",
-        "source": "endpoint_av",
-        "title": "Endpoint protection configuration changed",
-        "match": lambda e: (e.event_type or "") == "defender_config_change"
-        or _phrase(_text(e), "configuration has changed"),
-    },
-    {
-        "id": "DET_DEFENDER_EXCLUSION",
-        "name": "Windows Defender Exclusion Added",
-        "severity": "high",
-        "source": "edr",
-        "title": "PowerShell added a Windows Defender exclusion",
-        "match": lambda e: (e.event_type or "") in {"powershell_module", "powershell_script_block"}
-        and (_phrase(_text(e), "add-mppreference") or _phrase(_text(e), "set-mppreference"))
-        and _has_any(_text(e), ["-exclusionpath", "-exclusionprocess", "-exclusionextension"]),
-    },
-    {
-        "id": "DET_DEFENDER_UPDATE_ERROR",
-        "name": "Endpoint Protection Update Error",
-        "severity": "medium",
-        "source": "endpoint_av",
-        "title": "Endpoint protection failed to update security intelligence",
-        "match": lambda e: _phrase(_text(e), "error trying to update security intelligence"),
-    },
-    {
-        "id": "DET_DEFENDER_STATUS",
-        "name": "Endpoint Protection Status Update",
-        "severity": "low",
-        "source": "endpoint_av",
-        "title": "Endpoint protection status update",
-        "match": lambda e: (e.event_type or "") == "defender_status"
-        and not _defender_specific_signal(_text(e)),
-    },
-    # --- Endpoint detection (EDR-style) ---
-    {
-        "id": "DET_POWERSHELL_ENC",
-        "name": "Encoded / Obfuscated PowerShell",
-        "severity": "high",
-        "source": "edr",
-        "title": "Encoded or obfuscated PowerShell execution",
-        "match": lambda e: "powershell" in _text(e)
-        and (
-            _has(_text(e), "-encodedcommand")
-            or _has(_text(e), "-enc")
-            or _phrase(_text(e), "frombase64string")
-            or _phrase(_text(e), "downloadstring")
-        ),
-    },
-    {
-        "id": "DET_LSASS_DUMP",
-        "name": "LSASS Memory Dump",
-        "severity": "critical",
-        "source": "edr",
-        "title": "Potential LSASS credential dumping",
-        "match": lambda e: _has_any(_text(e), ["minidump", "comsvcs.dll", "mimikatz", "procdump", "pplblade"])
-        or ((e.event_type or "") == "process_access" and _phrase(_text(e), "lsass"))
-        or ((e.event_type or "") == "file_create" and _phrase(_text(e), "lsass") and _phrase(_text(e), ".dmp"))
-        or (
-            (e.event_type or "") in {"process_creation", "powershell_script_block"}
-            and _phrase(_text(e), "lsass")
-            and _has_any(_text(e), ["dump", "sekurlsa", "privilege::debug"])
-        ),
-    },
-    {
-        "id": "DET_RANSOM_ENCRYPT",
-        "name": "Mass File Encryption Pattern",
-        "severity": "critical",
-        "source": "edr",
-        "title": "Ransomware-like mass file modification",
-        "match": lambda e: _phrase(_text(e), ".encrypted")
-        or _phrase(_text(e), "ransomware")
-        or _phrase(_text(e), "high entropy file"),
-    },
-    {
-        "id": "DET_NTDS",
-        "name": "Active Directory Database Access",
-        "severity": "critical",
-        "source": "edr",
-        "title": "Possible NTDS.dit credential theft",
-        "match": lambda e: _phrase(_text(e), "ntdsutil")
-        or _phrase(_text(e), "ntds.dit")
-        or _has(_text(e), "ifm"),
-    },
-    {
-        "id": "DET_WEBSHELL",
-        "name": "Webshell Upload or Execution",
-        "severity": "high",
-        "source": "edr",
-        "title": "Possible webshell activity",
-        "match": lambda e: _phrase(_text(e), "webshell")
-        or _phrase(_text(e), "proxyshell")
-        or _phrase(_text(e), ".aspx")
-        or _phrase(_text(e), "w3wp.exe"),
-    },
-    {
-        "id": "DET_USB_EXEC",
-        "name": "Removable Media Execution",
-        "severity": "medium",
-        "source": "edr",
-        "title": "Execution from removable media",
-        "match": lambda e: _has(_text(e), "usb")
-        or _phrase(_text(e), "removable")
-        or _phrase(_text(e), "e:\\"),
-    },
-    # --- Network / firewall ---
-    {
-        "id": "DET_C2_EGRESS",
-        "name": "Suspicious Outbound C2",
-        "severity": "high",
-        "source": "firewall",
-        "title": "Suspicious outbound network connection",
-        "match": lambda e: (e.event_type or "") in {"network_conn", "reverse_shell"}
-        or _phrase(_text(e), "beacon")
-        or _phrase(_text(e), "ja3")
-        or _phrase(_text(e), "reverse shell")
-        or _has(_text(e), "c2"),
-    },
-    {
-        "id": "DET_DNS_TUNNEL",
-        "name": "Suspicious DNS Activity",
-        "severity": "high",
-        "source": "dns",
-        "title": "Suspicious DNS query or tunneling pattern",
-        "match": lambda e: (e.event_type or "") in {"dns_query", "dns_tunnel"}
-        and (
-            _phrase(_text(e), "high entropy")
-            or _phrase(_text(e), "tunnel")
-            or _phrase(_text(e), "dga")
-            or _phrase(_text(e), "txt record")
-        ),
-    },
-    # --- Identity / email ---
-    {
-        "id": "DET_BRUTE_FORCE",
-        "name": "Authentication Brute Force",
-        "severity": "high",
-        "source": "identity",
-        "title": "Brute-force authentication activity",
-        "match": lambda e: (e.event_type or "") == "brute_force" or _phrase(_text(e), "brute force"),
-    },
-    {
-        "id": "DET_FAILED_LOGON",
-        "name": "Failed Authentication",
-        "severity": "medium",
-        "source": "identity",
-        "title": "Failed authentication attempt",
-        "match": lambda e: (e.event_type or "") in {"failed_logon", "failed_login"},
-    },
-    {
-        "id": "DET_LATERAL_MOVE",
-        "name": "Lateral Movement",
-        "severity": "high",
-        "source": "identity",
-        "title": "Possible lateral movement",
-        "match": lambda e: (e.event_type or "") == "lateral_movement"
-        or _phrase(_text(e), "psexec")
-        or _phrase(_text(e), "wmiexec")
-        or _phrase(_text(e), "smb lateral"),
-    },
-    {
-        "id": "DET_PHISHING_LINK",
-        "name": "Phishing Delivery",
-        "severity": "medium",
-        "source": "email_gateway",
-        "title": "Suspicious inbound phishing link",
-        "match": lambda e: _phrase(_text(e), "phish")
-        or _phrase(_text(e), "spearphish")
-        or _phrase(_text(e), "login.php")
-        or (e.event_type or "") in {"phishing_delivery", "email"},
-    },
-]
+def _matches(node: Dict[str, Any], event: SecurityEvent) -> bool:
+    op, value = next(iter(node.items()))
+    text = _text(event)
+    if op == "all":
+        return all(_matches(child, event) for child in value)
+    if op == "any":
+        return any(_matches(child, event) for child in value)
+    if op == "event_type_in":
+        return (event.event_type or "").lower() in {v.lower() for v in value}
+    if op == "source_in":
+        return (event.source or "").lower() in {v.lower() for v in value}
+    if op == "text_any":
+        return any(v.lower() in text for v in value)
+    if op == "text_all":
+        return all(v.lower() in text for v in value)
+    if op == "text_none":
+        return not any(v.lower() in text for v in value)
+    if op == "token_any":
+        return any(re.search(rf"(?<![a-z0-9]){re.escape(v.lower())}(?![a-z0-9])", text) for v in value)
+    if op == "process_or_command_has":
+        return value.lower() in " ".join(filter(None, [event.process_name, event.command_line])).lower()
+    return False
 
 
 class DetectionService:
     @classmethod
     def evaluate_event(cls, event: SecurityEvent) -> List[Dict[str, Any]]:
-        hits = [rule for rule in DETECTION_RULES if rule["match"](event)]
+        version, rules = load_rules()
+        hits = [{**r, "severity": r["base_severity"], "version": version}
+                for r in rules if _matches(r["conditions"], event)]
         if not hits and event.severity in {"high", "critical"}:
             hits.append({
-                "id": "DET_SEVERITY_THRESHOLD",
-                "name": "High-severity source event",
-                "severity": event.severity,
-                "source": event.source,
+                "id": "DET_SEVERITY_THRESHOLD", "name": "High-severity source event",
                 "title": f"High-severity {event.event_type} from {event.source}",
-                "match": lambda _e: True,
+                "description": "Source-provided severity is high or critical; validate source evidence.",
+                "base_severity": event.severity, "severity": event.severity, "source": event.source,
+                "confidence_policy": "source_severity", "mitre": [], "version": version,
+                "conditions": {"event_type_in": [event.event_type]},
             })
         return hits
 
     @classmethod
-    def process_events(
-        cls, db: Session, events: List[SecurityEvent], tenant_id: str
-    ) -> List[Alert]:
-        created: List[Alert] = []
+    def process_events(cls, db: Session, events: List[SecurityEvent], tenant_id: str) -> List[Alert]:
+        created = []
         for event in events:
+            if event.tenant_id != tenant_id:
+                raise ValueError("Cannot evaluate an event outside the requested tenant.")
             for rule in cls.evaluate_event(event):
-                existing = (
-                    db.query(Alert)
-                    .filter(
-                        Alert.tenant_id == tenant_id,
-                        Alert.detection_rule_id == rule["id"],
-                    )
-                    .all()
-                )
-                duplicate = False
-                for alert in existing:
-                    if event.id in (alert.event_ids or []):
-                        duplicate = True
-                        break
+                duplicate = db.query(DetectionHit.id).filter_by(
+                    tenant_id=tenant_id, event_db_id=event.id, rule_id=rule["id"]
+                ).first()
                 if duplicate:
                     continue
-
-                evidence_blob = " ".join(
-                    filter(None, [event.command_line, event.raw_data, event.process_name, event.event_type])
-                )
-                mitre = MitreService.map_evidence_to_mitre(evidence_blob)
+                risk = RiskEngine.score(rule["base_severity"], rule["confidence_policy"])
+                evidence = " ".join(filter(None, [event.command_line, event.raw_data,
+                                                   event.process_name, event.event_type]))
+                # Use the bundled, version-labelled catalog here so MITRE enrichment
+                # cannot commit the shared ingestion transaction as a side effect.
+                mapped = MitreService.map_evidence_to_mitre(evidence)
+                allowed = set(rule.get("mitre", []))
+                candidates = [{
+                    "technique_id": m["technique_id"], "name": m["name"], "status": "candidate",
+                    "confidence": m["confidence"], "rationale": m["rationale"],
+                    "evidence_refs": m.get("evidence_refs", []), "data_version": m.get("data_version"),
+                    "source": m.get("source"), "requires_analyst_validation": True,
+                } for m in mapped if m["technique_id"] in allowed][:5]
+                aid = f"alt_{uuid.uuid4().hex[:10]}"
                 alert = Alert(
-                    id=f"alt_{uuid.uuid4().hex[:10]}",
-                    title=rule["title"],
-                    description=(
-                        f"Detection rule `{rule['name']}` matched event `{event.event_id}` "
-                        f"on asset `{event.hostname or 'unknown'}`. "
-                        f"Evidence: {(event.raw_data or '')[:400]}"
-                    ),
-                    severity=rule["severity"],
-                    status="new",
-                    source=event.source or rule["source"],
-                    rule_name=rule["name"],
-                    detection_rule_id=rule["id"],
-                    event_ids=[event.id],
-                    asset_id=event.hostname,
-                    affected_user=event.user,
-                    mitre_candidates=[
-                        {
-                            "technique_id": m["technique_id"],
-                            "name": m["name"],
-                            "status": "candidate",
-                            "confidence": m["confidence"],
-                            "rationale": m["rationale"],
-                            "data_version": m.get("data_version"),
-                            "source": m.get("source"),
-                        }
-                        for m in mitre[:5]
-                    ],
-                    tenant_id=tenant_id,
-                    is_simulated=event.is_simulated,
-                    created_at=event.timestamp or datetime.now(timezone.utc),
+                    id=aid, title=rule["title"],
+                    description=(f"Detection rule {rule['name']} matched event {event.event_id} "
+                                 f"on asset {event.hostname or 'unknown'}. Evidence: {(event.raw_data or '')[:400]}"),
+                    severity=risk["severity"], base_severity=risk["base_severity"],
+                    risk_score=risk["risk_score"], confidence=risk["confidence"],
+                    risk_factors=risk["risk_factors"], detection_rule_version=rule["version"],
+                    status="new", source=event.source or rule["source"], rule_name=rule["name"],
+                    detection_rule_id=rule["id"], event_ids=[event.id], asset_id=event.hostname,
+                    affected_user=event.user, mitre_candidates=candidates, tenant_id=tenant_id,
+                    is_simulated=event.is_simulated, created_at=event.timestamp or datetime.now(timezone.utc),
                 )
-                db.add(alert)
-                created.append(alert)
-        db.commit()
+                # Unique constraint handles races; savepoint avoids rolling back other events.
+                try:
+                    with db.begin_nested():
+                        db.add(alert)
+                        db.flush()
+                        db.add(DetectionHit(id=f"dh_{uuid.uuid4().hex[:16]}", tenant_id=tenant_id,
+                                            event_db_id=event.id, rule_id=rule["id"], alert_id=aid))
+                        db.flush()
+                    created.append(alert)
+                except IntegrityError:
+                    continue
+        # The caller owns commit/rollback for the shared SQLAlchemy session.
+        db.flush()
         return created

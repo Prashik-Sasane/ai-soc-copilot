@@ -278,6 +278,14 @@ export default function DashboardPage() {
                   <div className="space-y-1">
                     <div className="flex items-center space-x-2.5">
                       <SeverityBadge severity={alert.severity} />
+                      {typeof alert.risk_score === 'number' && (
+                        <span
+                          className="text-[10px] font-mono text-cyan-300"
+                          title="Heuristic risk score, not a probability of compromise"
+                        >
+                          {'Risk ' + alert.risk_score + '/100'}
+                        </span>
+                      )}
                       <span className="font-semibold text-sm text-white group-hover:text-cyan-400 transition-colors">
                         {alert.title}
                       </span>

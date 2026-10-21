@@ -84,6 +84,7 @@ def trigger_correlation(
     current_user: User = Depends(get_current_user)
 ):
     incidents = CorrelationEngine.correlate_alerts(db=db, tenant_id=current_user.tenant_id)
+    db.commit()
     return {
         "message": f"Correlation job completed. Created {len(incidents)} new incident(s).",
         "new_incident_ids": [i.id for i in incidents]

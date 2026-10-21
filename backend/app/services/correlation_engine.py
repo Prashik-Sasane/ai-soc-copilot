@@ -293,6 +293,7 @@ class CorrelationEngine:
             db.query(Alert)
             .filter(Alert.tenant_id == tenant_id)
             .order_by(Alert.created_at.desc())
+            .limit(settings.CORRELATION_MAX_ALERTS)
             .all()
         )
         if len(alerts) < min_alerts:
@@ -497,5 +498,6 @@ class CorrelationEngine:
                     alert.incident_id = inc.id
                 created_or_updated.append(inc)
 
-        db.commit()
+        # Callers own transaction boundaries; all alert and incident writes are flushed here.
+        db.flush()
         return created_or_updated

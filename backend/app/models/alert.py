@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Text, JSON
+from sqlalchemy import Column, String, DateTime, Text, JSON, Integer, Float
 from app.core.database import Base
 
 
@@ -20,6 +20,11 @@ class Alert(Base):
     link_reasons = Column(JSON, default=list)
     incident_id = Column(String, index=True, nullable=True)
     mitre_candidates = Column(JSON, default=list)
+    base_severity = Column(String, nullable=True)
+    risk_score = Column(Integer, nullable=True)
+    confidence = Column(Float, nullable=True)
+    risk_factors = Column(JSON, default=dict)
+    detection_rule_version = Column(String, nullable=True)
     
     asset_id = Column(String, nullable=True)
     affected_user = Column(String, nullable=True)

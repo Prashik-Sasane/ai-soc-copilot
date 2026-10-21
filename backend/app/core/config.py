@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # Correlation
     CORRELATION_WINDOW_MINUTES: int = 60
     CORRELATION_MIN_ALERTS: int = 2
+    CORRELATION_MAX_ALERTS: int = 2000
+
+    # Provisional heuristic risk boundaries; tune only with analyst-reviewed outcomes.
+    RISK_MEDIUM_THRESHOLD: int = 25
+    RISK_HIGH_THRESHOLD: int = 50
+    RISK_CRITICAL_THRESHOLD: int = 75
 
     # CORS - typed as Any to prevent pydantic-settings from auto JSON-decoding
     CORS_ORIGINS: Any = ["http://localhost:3000", "http://127.0.0.1:3000"]

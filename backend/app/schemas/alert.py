@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict
 
 
@@ -37,6 +37,11 @@ class AlertRead(BaseModel):
     link_reasons: Optional[List] = None
     incident_id: Optional[str] = None
     mitre_candidates: Optional[List] = None
+    base_severity: Optional[str] = None
+    risk_score: Optional[int] = None
+    confidence: Optional[float] = None
+    risk_factors: Optional[Dict[str, Any]] = None
+    detection_rule_version: Optional[str] = None
     detection_rule_id: Optional[str] = None
     
     asset_id: Optional[str] = None

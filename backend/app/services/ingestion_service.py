@@ -281,14 +281,16 @@ class EventIngestionService:
                     duplicates += 1
                     errors.append(f"Record #{idx + 1}: duplicate event_id {event_obj.event_id}")
                     continue
-                db.add(event_obj)
-                db.flush()
+                # Savepoint isolates a concurrent duplicate without rolling back
+                # earlier valid events in this ingestion batch.
+                with db.begin_nested():
+                    db.add(event_obj)
+                    db.flush()
                 stored.append(event_obj)
                 accepted += 1
                 if warnings:
                     errors.append(f"Record #{idx + 1} warnings: {', '.join(warnings)}")
             except IntegrityError:
-                db.rollback()
                 rejected += 1
                 duplicates += 1
                 errors.append(f"Record #{idx + 1}: duplicate event_id (integrity)")
@@ -318,8 +320,6 @@ class EventIngestionService:
             error=errors[0] if rejected and not accepted else None,
             connector_type=connector_type,
         )
-        db.commit()
-
         alerts_created = 0
         incidents_created = 0
         if run_detection and stored:
@@ -332,6 +332,8 @@ class EventIngestionService:
                     time_window_minutes=settings.CORRELATION_WINDOW_MINUTES,
                 )
                 incidents_created = len(incidents)
+        # Detection/correlation only flush within the shared transaction; ingestion owns commit.
+        db.commit()
 
         return IngestionBatchResponse(
             total_received=len(records),

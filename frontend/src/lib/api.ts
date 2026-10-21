@@ -5,6 +5,11 @@ export interface AlertItem {
   title: string;
   description?: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
+  base_severity?: 'critical' | 'high' | 'medium' | 'low' | null;
+  risk_score?: number | null;
+  confidence?: number | null;
+  risk_factors?: Record<string, string | number | boolean | null> | null;
+  detection_rule_version?: string | null;
   status: 'new' | 'acknowledged' | 'investigating' | 'escalated' | 'dismissed' | 'resolved';
   source: string;
   rule_name?: string;

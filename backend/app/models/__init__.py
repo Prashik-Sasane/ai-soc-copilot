@@ -2,6 +2,7 @@ from app.core.database import Base
 from app.models.user import User, UserRole
 from app.models.event import SecurityEvent
 from app.models.alert import Alert
+from app.models.detection_hit import DetectionHit
 from app.models.incident import Incident
 from app.models.indicator import Indicator
 from app.models.knowledge import KnowledgeDocument, DocumentChunk
@@ -16,6 +17,7 @@ __all__ = [
     "UserRole",
     "SecurityEvent",
     "Alert",
+    "DetectionHit",
     "Incident",
     "Indicator",
     "KnowledgeDocument",

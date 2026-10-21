@@ -145,7 +145,7 @@ export default function AlertsPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-soc-sidebar/60 border-b border-soc-cardBorder text-[11px] font-semibold uppercase tracking-wider text-soc-textMuted">
-                <th className="py-3 px-4">Severity</th>
+                <th className="py-3 px-4">Severity / Risk</th>
                 <th className="py-3 px-4">Alert Title</th>
                 <th className="py-3 px-4">Asset / Host</th>
                 <th className="py-3 px-4">Source</th>
@@ -165,6 +165,14 @@ export default function AlertsPage() {
                   <tr key={alert.id} className="hover:bg-soc-hover/50 transition-colors">
                     <td className="py-3 px-4">
                       <SeverityBadge severity={alert.severity} />
+                      {typeof alert.risk_score === 'number' && (
+                        <div
+                          className="mt-1 text-[10px] font-mono text-soc-textMuted"
+                          title="Heuristic risk score, not a probability of compromise"
+                        >
+                          {'Risk ' + alert.risk_score + '/100'}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-medium text-white">
@@ -246,16 +254,83 @@ export default function AlertsPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="p-3 rounded-xl bg-soc-sidebar border border-soc-cardBorder">
                   <span className="text-soc-textMuted">Detection Rule:</span>
                   <div className="font-mono text-cyan-400 mt-0.5">{selectedAlert.rule_name || 'N/A'}</div>
+                  {selectedAlert.detection_rule_version && (
+                    <div className="text-[10px] text-soc-textMuted mt-1">
+                      Rule version {selectedAlert.detection_rule_version}
+                    </div>
+                  )}
                 </div>
                 <div className="p-3 rounded-xl bg-soc-sidebar border border-soc-cardBorder">
                   <span className="text-soc-textMuted">Target Asset:</span>
                   <div className="font-mono text-amber-400 mt-0.5">{selectedAlert.asset_id || 'N/A'}</div>
                 </div>
               </div>
+
+              {(selectedAlert.risk_score != null ||
+                selectedAlert.confidence != null ||
+                selectedAlert.base_severity != null) && (
+                <section className="p-4 rounded-xl bg-cyan-950/20 border border-cyan-900/40 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="font-semibold text-cyan-200">Risk assessment</h4>
+                    <span className="text-[10px] uppercase tracking-wide text-amber-300 border border-amber-800/50 rounded-full px-2 py-1">
+                      Heuristic · not a probability
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <div className="text-soc-textMuted">Risk score</div>
+                      <div className="text-white font-semibold">
+                        {selectedAlert.risk_score != null
+                          ? selectedAlert.risk_score + '/100'
+                          : 'Not scored'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-soc-textMuted">Rule base severity</div>
+                      <div className="text-white font-semibold capitalize">
+                        {selectedAlert.base_severity || 'Unavailable'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-soc-textMuted">Evidence estimate</div>
+                      <div className="text-white font-semibold">
+                        {selectedAlert.confidence != null
+                          ? Math.round(selectedAlert.confidence * 100) + '%'
+                          : 'Unavailable'}
+                      </div>
+                      <div className="text-[10px] text-soc-textMuted">Policy-derived; not a probability</div>
+                    </div>
+                  </div>
+                  {selectedAlert.risk_factors && Object.keys(selectedAlert.risk_factors).length > 0 && (
+                    <div className="border-t border-cyan-900/40 pt-3">
+                      <div className="text-soc-textMuted mb-2">Scoring inputs</div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(selectedAlert.risk_factors)
+                          .filter(([key]) => key !== 'score_label')
+                          .map(([key, value]) => (
+                            <span
+                              key={key}
+                              className="rounded-lg border border-soc-cardBorder bg-soc-sidebar px-2.5 py-1.5 text-[10px]"
+                            >
+                              <span className="text-soc-textMuted">
+                                {key.replaceAll('_', ' ')}:
+                              </span>{' '}
+                              <span className="text-white">
+                                {typeof value === 'boolean'
+                                  ? (value ? 'yes' : 'no')
+                                  : String(value ?? 'unknown').replaceAll('_', ' ')}
+                              </span>
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {selectedAlert.assigned_to && (
                 <div className="text-soc-textMuted">Assigned to: <span className="text-white">{selectedAlert.assigned_to}</span></div>
