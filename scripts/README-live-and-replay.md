@@ -23,7 +23,7 @@ $login = Invoke-RestMethod -Method Post `
 $env:SOC_ACCESS_TOKEN = $login.access_token
 ```
 
-The JWT expires according to `ACCESS_TOKEN_EXPIRE_MINUTES` (8 hours by default). Log in again and restart the collector after it expires.
+The JWT expires according to `ACCESS_TOKEN_EXPIRE_MINUTES` (60 minutes by default). Log in again after it expires.
 
 ## 2. Collect live Windows events
 

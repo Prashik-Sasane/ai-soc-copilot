@@ -149,7 +149,7 @@ function CopilotContent() {
             <span>AI Copilot & Evidence-Grounded RAG Workspace</span>
           </h1>
           <p className="text-sm text-soc-textMuted mt-1">
-            RAG retrieves tenant-isolated knowledge for citations. It does not train or fine-tune a model. LLM summaries run only when an API key is configured.
+            Alert and event facts come from tenant-scoped records; RAG retrieves approved knowledge for cited guidance. RAG does not train a model. LLM summaries run only when configured.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -266,7 +266,7 @@ function CopilotContent() {
             className="flex items-center space-x-2 px-5 py-3 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white font-medium text-sm transition-all disabled:opacity-50 shrink-0"
           >
             <Send className={`w-4 h-4 ${loading ? 'animate-bounce' : ''}`} />
-            <span>{loading ? 'Analyzing...' : 'Run RAG Query'}</span>
+            <span>{loading ? 'Analyzing...' : 'Run Investigation'}</span>
           </button>
         </form>
 
@@ -301,9 +301,9 @@ function CopilotContent() {
           <div className="w-10 h-10 rounded-xl bg-purple-950/60 border border-purple-800/40 text-purple-400 flex items-center justify-center mx-auto animate-pulse">
             <Bot className="w-6 h-6 animate-spin" />
           </div>
-          <h3 className="text-base font-semibold text-white">Running LangGraph Investigation Nodes...</h3>
+          <h3 className="text-base font-semibold text-white">Running the investigation workflow...</h3>
           <p className="text-xs text-soc-textMuted max-w-md mx-auto leading-relaxed">
-            Extracting Intent → Querying Vector Database → Filtering Permissions → Mapping MITRE ATT&CK → Generating Evidence Citations
+            Parsing your request → retrieving tenant-scoped alerts and events → searching knowledge sources → mapping MITRE candidates → building a cited report
           </p>
         </div>
       )}
@@ -322,10 +322,18 @@ function CopilotContent() {
                 <span className="px-2 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-[10px] font-mono text-cyan-400">
                   {response.investigation_id?.slice(0, 14) || 'N/A'}
                 </span>
-                <span className="text-xs text-soc-textMuted font-mono">Confidence:</span>
+                <span className="text-xs text-soc-textMuted font-mono">Evidence coverage:</span>
                 <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-mono font-bold">
                   {Math.round((response.confidence || 0) * 100)}%
                 </span>
+                <span className="px-2 py-0.5 rounded bg-amber-950/50 text-amber-200 border border-amber-800/60 text-[10px]">
+                  Not attack probability
+                </span>
+                {response.status && (
+                  <span className="px-2 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-[10px] font-mono text-cyan-300">
+                    {response.status.replaceAll('_', ' ')}
+                  </span>
+                )}
                 <span className="px-2 py-0.5 rounded bg-soc-sidebar border border-soc-cardBorder text-[10px] font-mono text-soc-textMuted">
                   LLM: {response.llm_used ? 'configured provider' : 'not used'}
                 </span>
@@ -335,10 +343,58 @@ function CopilotContent() {
               </div>
             </div>
 
+            {response.incident && (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {[
+                  ['Alert', response.incident.alert_id],
+                  ['Incident', response.incident.incident_id],
+                  ['Host', response.incident.hostname],
+                  ['Affected user', response.incident.affected_user],
+                  ['Severity', response.incident.severity],
+                  ['Alert status', response.incident.alert_status],
+                ].map(([label, value]) => (
+                  <div key={label} className="p-3 rounded-xl bg-soc-sidebar border border-soc-cardBorder min-w-0">
+                    <div className="text-[10px] text-soc-textMuted">{label}</div>
+                    <div className="text-xs text-white font-mono mt-1 break-all">{value || 'Unavailable'}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {response.confidence_rationale && (
+              <p className="text-[11px] text-soc-textMuted">{response.confidence_rationale}</p>
+            )}
+
             <div className="p-4 rounded-xl bg-soc-sidebar border border-soc-cardBorder space-y-2">
               <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">Executive Summary</h4>
-              <p className="text-sm text-soc-textMain leading-relaxed">{response.summary}</p>
+              <p className="text-sm text-soc-textMain leading-relaxed">{response.executive_summary || response.summary}</p>
             </div>
+
+            {response.finding_details && response.finding_details.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold text-purple-400 uppercase tracking-wider">Evidence-linked Findings</h4>
+                <div className="space-y-2">
+                  {response.finding_details.map((finding) => (
+                    <article key={finding.finding_id} className="p-3 rounded-xl bg-soc-sidebar border border-soc-cardBorder space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h5 className="text-sm text-white font-semibold">{finding.title}</h5>
+                        <span className="text-[10px] uppercase tracking-wide text-amber-200">
+                          {finding.status}{finding.severity ? ' · ' + finding.severity : ''}
+                        </span>
+                      </div>
+                      <p className="text-xs text-soc-textMuted">{finding.description}</p>
+                      <p className="text-[11px] text-soc-textMuted">{finding.rationale}</p>
+                      {finding.evidence_refs.length > 0 && (
+                        <p className="text-[10px] font-mono text-cyan-300">Evidence: {finding.evidence_refs.join(', ')}</p>
+                      )}
+                      {finding.missing_data.length > 0 && (
+                        <p className="text-[10px] text-amber-300">Missing: {finding.missing_data.join('; ')}</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Bullet Findings */}
             <div className="space-y-2">
@@ -368,7 +424,7 @@ function CopilotContent() {
             )}
           </div>
 
-          {/* Grid: Mapped MITRE & Grounded Citations */}
+            {/* Grid: MITRE candidates and separately retrieved sources */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* MITRE Techniques */}
             <div className="glass-panel p-6 rounded-2xl border border-soc-cardBorder space-y-4">
@@ -387,9 +443,14 @@ function CopilotContent() {
                       <div className="flex items-center justify-between">
                         <span className="font-mono text-rose-400 font-bold">{m.technique_id}</span>
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-soc-textMuted">
-                            {Math.round((m.confidence || 0) * 100)}%
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-800/50 text-amber-300">
+                            {m.status || 'candidate'}
                           </span>
+                          {typeof m.match_score === 'number' && (
+                            <span className="text-[10px] font-mono text-soc-textMuted" title="Keyword match score, not probability">
+                              Match {Math.round(m.match_score * 100)}%
+                            </span>
+                          )}
                           <span className="text-[11px] text-soc-textMuted font-mono">{m.tactic}</span>
                         </div>
                       </div>
@@ -398,6 +459,10 @@ function CopilotContent() {
                         <p className="text-[11px] text-soc-textMuted font-mono italic bg-soc-card p-2 rounded border border-soc-cardBorder">
                           &quot;{m.evidence_snippet}&quot;
                         </p>
+                      )}
+                      {m.rationale && <p className="text-[11px] text-soc-textMuted">{m.rationale}</p>}
+                      {m.evidence_refs && m.evidence_refs.length > 0 && (
+                        <p className="text-[10px] font-mono text-cyan-300">Evidence: {m.evidence_refs.join(', ')}</p>
                       )}
                     </div>
                   ))
@@ -425,16 +490,21 @@ function CopilotContent() {
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-cyan-300">{cit.title}</span>
-                        <span className="text-[10px] font-mono text-emerald-400">
-                          Score: {cit.relevance_score ?? (cit as any).score ?? 'N/A'}
-                        </span>
+                        {typeof cit.relevance_score === 'number' && (
+                          <span className="text-[10px] font-mono text-soc-textMuted" title="Vector cosine similarity, not incident confidence">
+                            Cosine relevance: {cit.relevance_score}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-soc-textMuted line-clamp-3 leading-relaxed">
                         {cit.snippet}
                       </p>
                       <div className="text-[10px] font-mono text-soc-textMuted pt-0.5">
-                        Source: {cit.source_type} ({cit.source_id})
+                        Source: {cit.source_type} ({cit.source_id}){cit.hostname ? ' · Host: ' + cit.hostname : ''}
                       </div>
+                      {cit.source_ref && (
+                        <div className="text-[10px] text-cyan-300 break-all">Reference: {cit.source_ref}</div>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -445,6 +515,39 @@ function CopilotContent() {
               </div>
             </div>
           </div>
+
+          {response.timeline && response.timeline.length > 0 && (
+            <section className="glass-panel p-6 rounded-2xl border border-soc-cardBorder space-y-3">
+              <h3 className="text-base font-semibold text-white">Evidence Timeline</h3>
+              <div className="space-y-2">
+                {response.timeline.map((item, index) => (
+                  <div key={item.evidence_ref || index} className="border-l-2 border-cyan-800 pl-3 py-1">
+                    <div className="text-[10px] text-soc-textMuted font-mono">
+                      {item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Timestamp unavailable'}
+                      {item.hostname ? ' · ' + item.hostname : ''}
+                      {item.user ? ' · ' + item.user : ''}
+                    </div>
+                    <div className="text-xs text-white font-medium">{item.title}</div>
+                    {(item.process_name || item.command_line) && (
+                      <div className="text-[11px] text-soc-textMuted break-all">
+                        {item.process_name || ''}{item.command_line ? ' · ' + item.command_line : ''}
+                      </div>
+                    )}
+                    {item.evidence_ref && <div className="text-[10px] font-mono text-cyan-300">{item.evidence_ref}</div>}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {response.missing_data && response.missing_data.length > 0 && (
+            <section className="p-4 rounded-2xl border border-amber-800/40 bg-amber-950/20 space-y-2">
+              <h3 className="text-sm font-semibold text-amber-300">Missing telemetry / next investigation gaps</h3>
+              <ul className="list-disc pl-5 text-xs text-amber-100/80 space-y-1">
+                {response.missing_data.map((item, index) => <li key={index}>{item}</li>)}
+              </ul>
+            </section>
+          )}
 
           {/* Recommendations */}
           {response.recommendations && response.recommendations.length > 0 && (

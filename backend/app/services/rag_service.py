@@ -151,8 +151,17 @@ class RAGService:
                 scored.append((sim, chk))
 
         scored.sort(key=lambda x: x[0], reverse=True)
+        document_ids = {chunk.document_id for _, chunk in scored[:top_k]}
+        documents = {
+            document.id: document
+            for document in db.query(KnowledgeDocument).filter(
+                KnowledgeDocument.tenant_id == tenant_id,
+                KnowledgeDocument.id.in_(document_ids),
+            ).all()
+        } if document_ids else {}
         results = []
         for sim, chk in scored[:top_k]:
+            document = documents.get(chk.document_id)
             results.append({
                 "chunk_id": chk.id,
                 "document_id": chk.document_id,
@@ -161,5 +170,9 @@ class RAGService:
                 "content": chk.content,
                 "relevance_score": round(sim, 4),
                 "embedding_mode": chk.embedding_provider or VectorService.embedding_mode(),
+                "source_ref": document.source_ref if document else None,
+                "owner": document.owner if document else None,
+                "version": document.version if document else None,
+                "retrieved_at": document.retrieved_at.isoformat() if document and document.retrieved_at else None,
             })
         return results

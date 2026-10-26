@@ -28,7 +28,8 @@ def run_investigation(
         user_id=current_user.id,
         tenant_id=current_user.tenant_id,
         incident_id=query_req.incident_id,
-        alert_id=query_req.alert_id
+        alert_id=query_req.alert_id,
+        indicator_value=query_req.indicator_value,
     )
     return res
 

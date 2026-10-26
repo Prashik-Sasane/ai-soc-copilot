@@ -17,7 +17,7 @@ import {
   User as UserIcon,
   CheckCircle2,
 } from 'lucide-react';
-import { triggerSyntheticScenario, getCurrentUser, clearAuth, getIngestStatus, UserItem } from '@/lib/api';
+import { triggerSyntheticScenario, getCurrentUser, clearAuth, getIngestStatus, logoutUser, UserItem } from '@/lib/api';
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -60,6 +60,7 @@ export default function Navigation() {
     { label: 'MITRE ATT&CK', href: '/mitre', icon: Grid },
     { label: 'Threat Intel Lookup', href: '/indicators', icon: Search },
     { label: 'Knowledge & Audit', href: '/knowledge', icon: BookOpen },
+    { label: 'Account Security', href: '/security', icon: ShieldAlert },
   ];
 
   const handleSimulate = async () => {
@@ -77,7 +78,8 @@ export default function Navigation() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try { await logoutUser(); } catch { /* Clear this browser session even if the API is unavailable. */ }
     clearAuth();
     router.push('/login');
   };

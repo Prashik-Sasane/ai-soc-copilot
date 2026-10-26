@@ -29,6 +29,12 @@ Default logins (change in production):
 
 Both seeded users share `tenant_default`. Newly registered users get their own tenant.
 
+New public registrations are analyst-only; an admin account must be provisioned by an administrator. New passwords must be at least 12 characters and use at least two character types. The registration page rates passwords as weak, medium, or strong locally in the browser.
+
+After signing in, open **Account Security** in the sidebar to enroll an authenticator app such as Google Authenticator. Scan the QR code, confirm a current six-digit code, then save the one-time recovery codes. Login will require an authenticator or unused recovery code after MFA is enabled. Login attempts are limited by hashed account/IP buckets (10 attempts per 15 minutes); MFA attempts are limited to 5 per 10 minutes. Sign-out revokes all of that user's current JWTs; tokens expire after 60 minutes by default.
+
+The MFA secret is encrypted with a key derived from `SECRET_KEY`. Keep that key stable and set a unique random value of at least 32 characters before production use; production startup rejects the built-in development key. QR rendering uses the `qrcode[pil]` dependency installed from backend requirements.
+
 Set `ENVIRONMENT=production` to disable demo seeding (`/events/seed-demo`, `/events/simulate-scenario`, `/knowledge/seed-playbooks`).
 
 ---
@@ -41,6 +47,7 @@ See `.env.example`. Important keys:
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL or SQLite | App will not start |
 | `SECRET_KEY` | JWT signing | Use a unique value in production |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime | 60 minutes by default; sign-out revokes all active tokens for that user |
 | `INGEST_WEBHOOK_TOKENS` | `source_id:token` pairs for webhook ingest | Webhook returns 404/401 |
 | `EMBEDDING_PROVIDER` | `mock` (offline hash, labeled) or `gemini` | `gemini` without `GEMINI_API_KEY` errors; no silent semantic fallback |
 | `GEMINI_API_KEY` | Semantic embeddings and optional Gemini LLM | Offline hash retrieval / no LLM summary |

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ShieldAlert, Lock, Mail, ArrowRight, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
-import { loginUser, isAuthenticated } from '@/lib/api';
+import { AuthResponse, completeLoginMfaSetup, completeMfaLogin, isAuthenticated, loginUser, MfaSetupResponse, startLoginMfaSetup } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,6 +13,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaSetupToken, setMfaSetupToken] = useState<string | null>(null);
+  const [mfaSetup, setMfaSetup] = useState<MfaSetupResponse | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [pendingSession, setPendingSession] = useState<{ access_token: string; user: NonNullable<AuthResponse['user']> } | null>(null);
 
   useEffect(() => {
     if (isAuthenticated()) {
@@ -27,15 +33,42 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await loginUser(email, password);
+      const res = mfaSetupToken
+        ? await completeLoginMfaSetup(mfaSetupToken, mfaCode)
+        : mfaToken
+          ? await completeMfaLogin(mfaToken, mfaCode)
+          : await loginUser(email, password);
+      if (res.mfa_setup_required && res.mfa_token) {
+        setMfaSetupToken(res.mfa_token);
+        setMfaSetup(await startLoginMfaSetup(res.mfa_token));
+        setSuccess('Password accepted. Scan the QR code with your authenticator app, then enter its current code to finish sign-in.');
+        setLoading(false);
+        return;
+      }
+      if (res.mfa_required && res.mfa_token) {
+        setMfaToken(res.mfa_token);
+        setSuccess('Password accepted. Enter the current code from your authenticator app or a recovery code.');
+        setLoading(false);
+        return;
+      }
+      if (!res.access_token || !res.user) throw new Error('Sign-in did not return an access token.');
+      setMfaToken(null);
+      setMfaSetupToken(null);
+      setMfaSetup(null);
+      setMfaCode('');
+      setSuccess(`Authenticated successfully as ${res.user.role.toUpperCase()} (${res.user.email})`);
+      if (res.recovery_codes?.length) {
+        setRecoveryCodes(res.recovery_codes);
+        setPendingSession({ access_token: res.access_token, user: res.user });
+        return;
+      }
       localStorage.setItem('soc_token', res.access_token);
       localStorage.setItem('soc_user', JSON.stringify(res.user));
-      setSuccess(`Authenticated successfully as ${res.user.role.toUpperCase()} (${res.user.email})`);
       setTimeout(() => {
         router.push('/');
       }, 1000);
     } catch (err: any) {
-      setError(err?.message || 'Invalid email or password credentials.');
+      setError(err?.message || (mfaSetupToken || mfaToken ? 'Invalid authenticator code.' : 'Invalid email or password credentials.'));
     } finally {
       setLoading(false);
     }
@@ -62,7 +95,7 @@ export default function LoginPage() {
             <ShieldAlert className="w-7 h-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">SOC Analyst Portal</h1>
-          <p className="text-xs text-soc-textMuted">Authenticate to access enterprise threat intelligence & RAG copilot</p>
+          <p className="text-xs text-soc-textMuted">{mfaSetupToken ? 'Set up your required second factor' : mfaToken ? 'Two-factor verification' : 'Authenticate to access enterprise threat intelligence & RAG copilot'}</p>
         </div>
 
         {error && (
@@ -80,6 +113,7 @@ export default function LoginPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!mfaToken && !mfaSetupToken && <>
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-soc-textMuted flex items-center space-x-1">
               <Mail className="w-3.5 h-3.5 text-cyan-400" />
@@ -110,17 +144,57 @@ export default function LoginPage() {
             />
           </div>
 
+          </>}
+
+          {mfaSetupToken && mfaSetup && (
+            <div className="space-y-3 rounded-xl border border-cyan-800/50 bg-soc-sidebar p-4">
+              <p className="text-xs text-white">Scan this QR code using Google Authenticator or another TOTP app. Setup expires at {new Date(mfaSetup.expires_at).toLocaleTimeString()}.</p>
+              <img src={mfaSetup.qr_code_data_uri} alt="Authenticator enrollment QR code" className="w-48 h-48 bg-white rounded-lg p-2 mx-auto" />
+              <details>
+                <summary className="cursor-pointer text-xs text-cyan-300">Can’t scan? Show setup URI</summary>
+                <code className="block mt-2 break-all text-[10px] text-white">{mfaSetup.otpauth_uri}</code>
+              </details>
+            </div>
+          )}
+          {mfaSetupToken && !mfaSetup && (
+            <button type="button" onClick={async () => {
+              setLoading(true); setError(null);
+              try { setMfaSetup(await startLoginMfaSetup(mfaSetupToken)); }
+              catch (e: any) { setError(e?.message || 'Unable to load the authenticator QR code.'); }
+              finally { setLoading(false); }
+            }} className="text-xs text-cyan-300 underline">Retry loading authenticator QR code</button>
+          )}
+
+          {(mfaToken || mfaSetupToken) && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-soc-textMuted flex items-center space-x-1">
+                <Lock className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{mfaSetupToken ? 'Authenticator code to finish setup' : 'Authenticator code or recovery code'}</span>
+              </label>
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                required
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.trim())}
+                placeholder="123456"
+                className="w-full px-4 py-2.5 bg-soc-sidebar border border-soc-cardBorder rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500 font-mono tracking-widest"
+              />
+              <button type="button" onClick={() => { setMfaToken(null); setMfaSetupToken(null); setMfaSetup(null); setMfaCode(''); setError(null); setSuccess(null); }} className="text-xs text-cyan-400 underline">Back to password</button>
+            </div>
+          )}
+
           <div className="pt-2 space-y-3">
             <button
               type="submit"
               disabled={loading}
               className="w-full flex items-center justify-center space-x-2 py-3 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-medium text-xs shadow-cyan-glow transition-all active:scale-95 disabled:opacity-50"
             >
-              <span>{loading ? 'Authenticating...' : 'Sign In to SOC Workspace'}</span>
+              <span>{loading ? 'Authenticating...' : mfaSetupToken ? 'Verify code & finish setup' : mfaToken ? 'Verify & Sign In' : 'Sign In to SOC Workspace'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 
-            <div className="flex gap-2">
+            {!mfaToken && !mfaSetupToken && <div className="flex gap-2">
               <button
                 type="button"
                 onClick={handleDemoFillAdmin}
@@ -137,9 +211,25 @@ export default function LoginPage() {
                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
                 <span>Analyst Demo</span>
               </button>
-            </div>
+            </div>}
           </div>
         </form>
+
+        {recoveryCodes.length > 0 && (
+          <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-4 space-y-2">
+            <h2 className="text-sm font-semibold text-amber-200">Save your one-time recovery codes</h2>
+            <p className="text-xs text-amber-100/80">These are shown once. Store them securely; each code can be used only one time.</p>
+            <div className="grid grid-cols-2 gap-2 font-mono text-xs text-white">{recoveryCodes.map((item) => <code key={item}>{item}</code>)}</div>
+            <button type="button" onClick={() => navigator.clipboard?.writeText(recoveryCodes.join('\n'))} className="text-xs text-cyan-300 underline">Copy recovery codes</button>
+            <button type="button" onClick={() => {
+              if (pendingSession) {
+                localStorage.setItem('soc_token', pendingSession.access_token);
+                localStorage.setItem('soc_user', JSON.stringify(pendingSession.user));
+              }
+              router.push('/');
+            }} className="block w-full px-3 py-2 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-medium">I saved my recovery codes — continue</button>
+          </div>
+        )}
 
         <div className="pt-4 border-t border-soc-cardBorder text-center text-xs text-soc-textMuted">
           Need an analyst account?{' '}

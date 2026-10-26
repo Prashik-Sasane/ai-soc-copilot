@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
+import uuid
 from jose import jwt
 from passlib.context import CryptContext
 from app.core.config import settings
@@ -16,12 +17,16 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(
-    subject: Union[str, Any], expires_delta: Optional[timedelta] = None, role: str = "analyst"
+    subject: Union[str, Any], expires_delta: Optional[timedelta] = None, role: str = "analyst",
+    token_version: int = 0, purpose: str = "access",
 ) -> str:
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode = {"exp": expire, "sub": str(subject), "role": role}
+    to_encode = {
+        "exp": expire, "sub": str(subject), "role": role,
+        "ver": token_version, "jti": uuid.uuid4().hex, "purpose": purpose,
+    }
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt

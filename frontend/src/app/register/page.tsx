@@ -11,11 +11,12 @@ export default function RegisterPage() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('analyst');
   const [autoLogin, setAutoLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const passwordClasses = [/[a-z]/.test(password), /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9\s]/.test(password)].filter(Boolean).length;
+  const passwordStrength = !password ? null : password.length < 12 || passwordClasses < 2 ? 'weak' : password.length >= 16 && passwordClasses >= 3 ? 'strong' : 'medium';
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -30,10 +31,14 @@ export default function RegisterPage() {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    if (passwordStrength === 'weak') {
+      setError('Use at least 12 characters and at least two character types.');
+      return;
+    }
     setLoading(true);
 
     try {
-      await registerUser(email, password, fullName, role);
+      await registerUser(email, password, fullName, 'analyst');
       setSuccess('Analyst account created successfully!');
 
       if (autoLogin) {
@@ -41,6 +46,7 @@ export default function RegisterPage() {
           try {
             clearAuth();
             const loginRes = await loginUser(email, password);
+            if (!loginRes.access_token || !loginRes.user) throw new Error('Complete MFA to sign in.');
             localStorage.setItem('soc_token', loginRes.access_token);
             localStorage.setItem('soc_user', JSON.stringify(loginRes.user));
             setSuccess(`Authenticated as ${loginRes.user.role.toUpperCase()} - Redirecting to SOC workspace...`);
@@ -125,33 +131,32 @@ export default function RegisterPage() {
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-soc-textMuted flex items-center space-x-1">
               <Lock className="w-3.5 h-3.5 text-purple-400" />
-              <span>Password (min 6 chars)</span>
+              <span>Password (at least 12 characters)</span>
             </label>
             <input
               type="password"
               required
-              minLength={6}
+              minLength={12}
+              maxLength={72}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
               className="w-full px-4 py-2.5 bg-soc-sidebar border border-soc-cardBorder rounded-xl text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-soc-textMuted flex items-center space-x-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-              <span>Assign RBAC Role</span>
-            </label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="w-full px-4 py-2.5 bg-soc-sidebar border border-soc-cardBorder rounded-xl text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
-            >
-              <option value="analyst">Analyst (Triage & Incident Execution)</option>
-              <option value="admin">Admin (Full System & Knowledge Management)</option>
-              <option value="viewer">Viewer (Read Only Metrics)</option>
-            </select>
+            {password && (
+              <div aria-live="polite" className="space-y-1 pt-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-soc-textMuted">Password strength</span>
+                  <span className={passwordStrength === 'strong' ? 'text-emerald-400' : passwordStrength === 'medium' ? 'text-amber-300' : 'text-rose-400'}>
+                    {passwordStrength?.toUpperCase()}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded bg-soc-card overflow-hidden">
+                  <div className={`h-full transition-all ${passwordStrength === 'strong' ? 'w-full bg-emerald-500' : passwordStrength === 'medium' ? 'w-2/3 bg-amber-400' : 'w-1/3 bg-rose-500'}`} />
+                </div>
+                <p className="text-[10px] text-soc-textMuted">Strength uses length and lowercase, uppercase, number, and symbol variety. Passwords are never sent to an external strength service.</p>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center space-x-2 text-xs text-soc-textMuted">

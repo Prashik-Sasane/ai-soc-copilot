@@ -112,8 +112,12 @@ export interface CopilotResponse {
     technique_id: string;
     technique_name: string;
     tactic: string;
-    confidence: number;
-    evidence_snippet: string;
+    confidence?: number | null;
+    match_score?: number | null;
+    status?: string;
+    rationale?: string;
+    evidence_refs?: string[];
+    evidence_snippet?: string;
   }>;
   cited_evidence: Array<{
     citation_id: string;
@@ -121,7 +125,11 @@ export interface CopilotResponse {
     source_id: string;
     title: string;
     snippet: string;
-    relevance_score: number;
+    relevance_score?: number | null;
+    hostname?: string | null;
+    timestamp?: string | null;
+    source_ref?: string | null;
+    score_type?: string | null;
   }>;
   recommendations: Array<{
     category: string;
@@ -129,8 +137,47 @@ export interface CopilotResponse {
     description: string;
     priority: string;
     requires_approval: boolean;
+    rationale?: string | null;
+    evidence_refs?: string[];
+    prerequisites?: string[];
+    expected_outcome?: string | null;
+    status?: string;
   }>;
   confidence: number;
+  confidence_rationale?: string | null;
+  status?: string;
+  incident?: {
+    alert_id?: string | null;
+    incident_id?: string | null;
+    hostname?: string | null;
+    affected_user?: string | null;
+    severity?: string | null;
+    alert_status?: string | null;
+  };
+  executive_summary?: string | null;
+  finding_details?: Array<{
+    finding_id: string;
+    title: string;
+    status: string;
+    severity?: string | null;
+    description: string;
+    rationale: string;
+    evidence_refs: string[];
+    missing_data: string[];
+  }>;
+  timeline?: Array<{
+    timestamp?: string | null;
+    title: string;
+    event_type?: string | null;
+    hostname?: string | null;
+    user?: string | null;
+    process_name?: string | null;
+    command_line?: string | null;
+    evidence_ref?: string | null;
+  }>;
+  indicators?: Array<Record<string, any>>;
+  missing_data?: string[];
+  sources?: Array<Record<string, any>>;
   limitations: string[];
   llm_used?: boolean;
   embedding_mode?: string;
@@ -144,12 +191,23 @@ export interface UserItem {
   role: 'admin' | 'analyst' | 'viewer';
   tenant_id: string;
   is_active: boolean;
+  mfa_enabled?: boolean;
 }
 
 export interface AuthResponse {
-  access_token: string;
+  access_token?: string;
   token_type: string;
-  user: UserItem;
+  user?: UserItem;
+  mfa_required?: boolean;
+  mfa_setup_required?: boolean;
+  mfa_token?: string;
+  recovery_codes?: string[];
+}
+
+export interface MfaSetupResponse {
+  otpauth_uri: string;
+  qr_code_data_uri: string;
+  expires_at: string;
 }
 
 export function getAuthToken(): string | null {
@@ -312,6 +370,47 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     method: 'POST',
     body: JSON.stringify({ email, password }),
   }, false);
+}
+
+export async function completeMfaLogin(mfaToken: string, code: string): Promise<AuthResponse> {
+  return fetchAPI<AuthResponse>('/auth/login/mfa', {
+    method: 'POST',
+    body: JSON.stringify({ mfa_token: mfaToken, code }),
+  }, false);
+}
+
+export async function startLoginMfaSetup(mfaToken: string): Promise<MfaSetupResponse> {
+  return fetchAPI<MfaSetupResponse>('/auth/login/mfa/setup', {
+    method: 'POST',
+    body: JSON.stringify({ mfa_token: mfaToken }),
+  }, false);
+}
+
+export async function completeLoginMfaSetup(mfaToken: string, code: string): Promise<AuthResponse> {
+  return fetchAPI<AuthResponse>('/auth/login/mfa/enable', {
+    method: 'POST',
+    body: JSON.stringify({ mfa_token: mfaToken, code }),
+  }, false);
+}
+
+export async function getMfaStatus(): Promise<{ enabled: boolean; setup_pending: boolean }> {
+  return fetchAPI('/auth/mfa/status');
+}
+
+export async function startMfaSetup(): Promise<MfaSetupResponse> {
+  return fetchAPI('/auth/mfa/setup', { method: 'POST' });
+}
+
+export async function enableMfa(code: string): Promise<{ enabled: boolean; recovery_codes: string[] }> {
+  return fetchAPI('/auth/mfa/enable', { method: 'POST', body: JSON.stringify({ code }) });
+}
+
+export async function disableMfa(password: string, code: string): Promise<{ enabled: boolean; message: string }> {
+  return fetchAPI('/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ password, code }) });
+}
+
+export async function logoutUser(): Promise<void> {
+  await fetchAPI('/auth/logout', { method: 'POST' });
 }
 
 export async function registerUser(email: string, password: string, fullName?: string, role: string = 'analyst'): Promise<UserItem> {

@@ -75,6 +75,9 @@ async def add_security_headers_and_logging(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.url.path.startswith(f"{settings.API_V1_STR}/auth/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
     
     logger.info(
         f"{request.method} {request.url.path} Completed in {process_time:.2f}ms with status {response.status_code}"

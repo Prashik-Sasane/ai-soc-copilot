@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, List
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env regardless of the working directory: backend/app/core/config.py -> repo root.
@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "dev_secret_key_change_in_production_min_32_bytes_long_key_soc"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    AUTH_LOGIN_MAX_ATTEMPTS: int = 10
+    AUTH_LOGIN_WINDOW_MINUTES: int = 15
+    AUTH_MFA_MAX_ATTEMPTS: int = 5
+    AUTH_MFA_WINDOW_MINUTES: int = 10
 
     # Databases
     DATABASE_URL: str = "sqlite:///./ai_soc_dev.db"
@@ -85,6 +89,13 @@ class Settings(BaseSettings):
                     pass
             return [i.strip() for i in stripped.split(",") if i.strip()]
         return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    @model_validator(mode="after")
+    def validate_production_secret(self):
+        if self.ENVIRONMENT.lower() in {"production", "prod"}:
+            if len(self.SECRET_KEY) < 32 or self.SECRET_KEY.startswith("dev_secret_key"):
+                raise ValueError("Production requires a unique SECRET_KEY with at least 32 characters.")
+        return self
 
     model_config = SettingsConfigDict(
         env_file=(str(_REPO_ROOT / ".env"), str(_BACKEND_DIR / ".env")),

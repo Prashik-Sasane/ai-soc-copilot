@@ -10,6 +10,7 @@ from app.models.investigation import InvestigationHistory, AnalystFeedback
 from app.models.audit import AuditLog
 from app.models.ingest import IngestSource, IngestParseError
 from app.models.mitre import MitreTechnique
+from app.models.auth_throttle import AuthThrottle
 
 __all__ = [
     "Base",
@@ -28,4 +29,5 @@ __all__ = [
     "IngestSource",
     "IngestParseError",
     "MitreTechnique",
+    "AuthThrottle",
 ]

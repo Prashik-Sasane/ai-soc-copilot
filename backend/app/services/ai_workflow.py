@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, TypedDict
 from sqlalchemy.orm import Session
+from langgraph.graph import END, StateGraph
 
 from app.models.event import SecurityEvent
 from app.models.alert import Alert
@@ -22,6 +23,16 @@ class InvestigationState(TypedDict):
     incident_id: Optional[str]
     alert_id: Optional[str]
     indicator_value: Optional[str]
+    target_hostname: Optional[str]
+    target_user: Optional[str]
+    incident_context: Dict[str, Any]
+    excluded_evidence: List[Dict[str, Any]]
+    finding_details: List[Dict[str, Any]]
+    timeline: List[Dict[str, Any]]
+    missing_data: List[str]
+    confidence_rationale: str
+    status: str
+    investigation_id: str
     retrieved_events: List[Dict[str, Any]]
     retrieved_alerts: List[Dict[str, Any]]
     retrieved_indicators: List[Dict[str, Any]]
@@ -58,105 +69,178 @@ class AISocCopilotWorkflow:
 
     @classmethod
     def node_query_understanding(cls, state: InvestigationState) -> InvestigationState:
-        q = state["query"].lower()
+        query = state["query"]
         state["findings"] = []
         state["limitations"] = []
-        
-        # Detect intent flags
-        if "explain" in q or "summary" in q or "summarize" in q:
-            state["findings"].append("Intent: Explanation & Context Summary")
-        elif "recommend" in q or "next step" in q or "action" in q:
-            state["findings"].append("Intent: Prioritized Investigative & Response Guidance")
-        elif "evidence" in q or "show" in q:
-            state["findings"].append("Intent: Evidence Deep-Dive")
-        else:
-            state["findings"].append("Intent: General Security Triage Query")
+
+        # Accept identifiers supplied in the request or included in the analyst's text.
+        if not state["alert_id"]:
+            found = re.search(r"\balt_[A-Za-z0-9_-]+\b", query, re.I)
+            state["alert_id"] = found.group(0) if found else None
+        if not state["incident_id"]:
+            found = re.search(r"\binc_[A-Za-z0-9_-]+\b", query, re.I)
+            state["incident_id"] = found.group(0) if found else None
+
+        # Hostnames are constraints for structured telemetry lookup, not RAG hints only.
+        host_match = re.search(
+            r"\b(?:host(?:name)?|asset)\s*(?:is|=|:)?\s*([A-Za-z0-9][A-Za-z0-9._-]*)",
+            query, re.I,
+        ) or re.search(r"\bon\s+([A-Za-z0-9][A-Za-z0-9._-]*)", query, re.I)
+        state["target_hostname"] = host_match.group(1).rstrip(".,;") if host_match else None
+        user_match = re.search(r"\buser\s*(?:is|=|:)?\s*([A-Za-z0-9_.@\\-]+)", query, re.I)
+        state["target_user"] = user_match.group(1).rstrip(".,;") if user_match else None
 
         return state
 
     @classmethod
     def node_evidence_retrieval(cls, state: InvestigationState, db: Session) -> InvestigationState:
         tenant_id = state["tenant_id"]
-        
-        # 1. Retrieve Incident & attached alerts/events
-        retrieved_events = []
-        retrieved_alerts = []
-        retrieved_indicators = []
+        retrieved_events: List[Dict[str, Any]] = []
+        retrieved_alerts: List[Dict[str, Any]] = []
+        retrieved_indicators: List[Dict[str, Any]] = []
+        state["excluded_evidence"] = []
+        target_host = (state.get("target_hostname") or "").casefold()
+        incident = None
+        alerts: List[Alert] = []
 
         if state["incident_id"]:
-            inc = db.query(Incident).filter(Incident.id == state["incident_id"], Incident.tenant_id == tenant_id).first()
-            if inc and inc.alert_ids:
-                alerts = db.query(Alert).filter(Alert.id.in_(inc.alert_ids), Alert.tenant_id == tenant_id).all()
-                for a in alerts:
-                    retrieved_alerts.append({
-                        "id": a.id,
-                        "title": a.title,
-                        "severity": a.severity,
-                        "source": a.source,
-                        "rule_name": a.rule_name,
-                        "asset_id": a.asset_id
-                    })
-                    if a.event_ids:
-                        evts = db.query(SecurityEvent).filter(SecurityEvent.id.in_(a.event_ids), SecurityEvent.tenant_id == tenant_id).all()
-                        for e in evts:
-                            retrieved_events.append({
-                                "id": e.id,
-                                "event_id": e.event_id,
-                                "source": e.source,
-                                "event_type": e.event_type,
-                                "user": e.user,
-                                "src_ip": e.src_ip,
-                                "dst_ip": e.dst_ip,
-                                "process_name": e.process_name,
-                                "command_line": cls.sanitize_untrusted_input(e.command_line),
-                                "domain": e.domain,
-                                "raw_data": cls.sanitize_untrusted_input(e.raw_data)
-                            })
-            if inc and inc.indicator_ids:
-                inds = db.query(Indicator).filter(Indicator.id.in_(inc.indicator_ids), Indicator.tenant_id == tenant_id).all()
-                for ind in inds:
-                    retrieved_indicators.append({
-                        "id": ind.id,
-                        "value": ind.indicator_value,
-                        "type": ind.indicator_type,
-                        "reputation_score": ind.reputation_score,
-                        "risk_level": ind.risk_level,
-                        "threat_actor": ind.threat_actor
-                    })
-
+            incident = db.query(Incident).filter(
+                Incident.id == state["incident_id"], Incident.tenant_id == tenant_id
+            ).first()
+            if incident:
+                query = db.query(Alert).filter(
+                    Alert.tenant_id == tenant_id, Alert.id.in_(incident.alert_ids or [])
+                )
+                if state["alert_id"]:
+                    query = query.filter(Alert.id == state["alert_id"])
+                alerts = query.order_by(Alert.created_at.desc()).all()
+            else:
+                state["limitations"].append("The requested incident ID was not found in this tenant.")
         elif state["alert_id"]:
-            alt = db.query(Alert).filter(Alert.id == state["alert_id"], Alert.tenant_id == tenant_id).first()
-            if alt:
-                retrieved_alerts.append({
-                    "id": alt.id,
-                    "title": alt.title,
-                    "severity": alt.severity,
-                    "source": alt.source,
-                    "rule_name": alt.rule_name,
-                    "asset_id": alt.asset_id
-                })
-                if alt.event_ids:
-                    evts = db.query(SecurityEvent).filter(SecurityEvent.id.in_(alt.event_ids), SecurityEvent.tenant_id == tenant_id).all()
-                    for e in evts:
-                        retrieved_events.append({
-                            "id": e.id,
-                            "event_id": e.event_id,
-                            "source": e.source,
-                            "event_type": e.event_type,
-                            "user": e.user,
-                            "command_line": cls.sanitize_untrusted_input(e.command_line),
-                            "raw_data": cls.sanitize_untrusted_input(e.raw_data)
-                        })
+            alert = db.query(Alert).filter(
+                Alert.id == state["alert_id"], Alert.tenant_id == tenant_id
+            ).first()
+            if alert:
+                alerts = [alert]
+            else:
+                state["limitations"].append("The requested alert ID was not found in this tenant.")
+        elif state.get("target_hostname"):
+            # A hostname-only investigation uses exact structured filtering.
+            alert_query = db.query(Alert).filter(
+                Alert.tenant_id == tenant_id,
+                Alert.asset_id.ilike(state["target_hostname"]),
+            )
+            if state.get("target_user"):
+                alert_query = alert_query.filter(Alert.affected_user.ilike(state["target_user"]))
+            alerts = alert_query.order_by(Alert.created_at.desc()).limit(50).all()
 
-        if not retrieved_events and not retrieved_alerts:
-            state.setdefault("limitations", [])
+        allowed_event_ids = set()
+        for alert in alerts:
+            alert_host = (alert.asset_id or "").casefold()
+            if target_host and alert_host != target_host:
+                state["excluded_evidence"].append({
+                    "source_type": "alert", "source_id": alert.id,
+                    "hostname": alert.asset_id, "reason": "requested_hostname_mismatch",
+                })
+                continue
+            if state.get("target_user") and (alert.affected_user or "").casefold() != state["target_user"].casefold():
+                state["excluded_evidence"].append({
+                    "source_type": "alert", "source_id": alert.id,
+                    "user": alert.affected_user, "reason": "requested_user_mismatch",
+                })
+                continue
+            retrieved_alerts.append({
+                "id": alert.id, "title": alert.title, "severity": alert.severity,
+                "status": alert.status, "source": alert.source, "rule_name": alert.rule_name,
+                "asset_id": alert.asset_id, "affected_user": alert.affected_user,
+                "incident_id": alert.incident_id, "event_ids": list(alert.event_ids or []),
+                "created_at": alert.created_at, "mitre_candidates": alert.mitre_candidates or [],
+            })
+            allowed_event_ids.update(alert.event_ids or [])
+
+        if incident:
+            state["incident_context"] = {
+                "incident_id": incident.id, "title": incident.title, "status": incident.status,
+                "severity": incident.severity, "alert_ids": list(incident.alert_ids or []),
+            }
+            if incident.indicator_ids:
+                indicators = db.query(Indicator).filter(
+                    Indicator.id.in_(incident.indicator_ids), Indicator.tenant_id == tenant_id
+                ).all()
+                retrieved_indicators.extend([{
+                    "id": i.id, "value": i.indicator_value, "type": i.indicator_type,
+                    "reputation_score": i.reputation_score, "risk_level": i.risk_level,
+                    "threat_actor": i.threat_actor, "source_attribution": i.source_attribution,
+                } for i in indicators])
+
+        # Host-only lookups may include events not already attached to an alert.
+        if state.get("target_hostname") and not state["incident_id"] and not state["alert_id"]:
+            host_events = db.query(SecurityEvent).filter(
+                SecurityEvent.tenant_id == tenant_id,
+                SecurityEvent.hostname.ilike(state["target_hostname"]),
+                *([SecurityEvent.user.ilike(state["target_user"])] if state.get("target_user") else []),
+            ).order_by(SecurityEvent.timestamp.desc()).limit(100).all()
+            allowed_event_ids.update(event.id for event in host_events)
+
+        if allowed_event_ids:
+            events = db.query(SecurityEvent).filter(
+                SecurityEvent.tenant_id == tenant_id,
+                SecurityEvent.id.in_(allowed_event_ids),
+            ).order_by(SecurityEvent.timestamp.asc()).limit(200).all()
+            for event in events:
+                event_host = (event.hostname or "").casefold()
+                event_user = (event.user or "").casefold()
+                if target_host and event_host != target_host:
+                    state["excluded_evidence"].append({
+                        "source_type": "event", "source_id": event.id,
+                        "hostname": event.hostname, "reason": "requested_hostname_mismatch_or_missing",
+                    })
+                    continue
+                if state.get("target_user") and event_user != state["target_user"].casefold():
+                    state["excluded_evidence"].append({
+                        "source_type": "event", "source_id": event.id,
+                        "user": event.user, "reason": "requested_user_mismatch",
+                    })
+                    continue
+                metadata = event.metadata_json if isinstance(event.metadata_json, dict) else {}
+                retrieved_events.append({
+                    "id": event.id, "event_id": event.event_id, "timestamp": event.timestamp,
+                    "hostname": event.hostname, "source": event.source, "event_type": event.event_type,
+                    "severity": event.severity, "user": event.user, "src_ip": event.src_ip,
+                    "dst_ip": event.dst_ip, "process_name": event.process_name,
+                    "command_line": cls.sanitize_untrusted_input(event.command_line),
+                    "domain": event.domain, "file_hash": event.file_hash,
+                    "process_id": metadata.get("process_id") or metadata.get("process.pid"),
+                    "parent_process_name": metadata.get("parent_process_name") or metadata.get("parent.process.name"),
+                    "parent_process_id": metadata.get("parent_process_id") or metadata.get("parent.process.pid"),
+                    "raw_data": cls.sanitize_untrusted_input(event.raw_data),
+                })
+
+        if state.get("indicator_value"):
+            indicator = db.query(Indicator).filter(
+                Indicator.tenant_id == tenant_id,
+                Indicator.indicator_value == state["indicator_value"],
+            ).first()
+            if indicator:
+                retrieved_indicators.append({
+                    "id": indicator.id, "value": indicator.indicator_value, "type": indicator.indicator_type,
+                    "reputation_score": indicator.reputation_score, "risk_level": indicator.risk_level,
+                    "threat_actor": indicator.threat_actor, "source_attribution": indicator.source_attribution,
+                })
+
+        if target_host and state["excluded_evidence"]:
             state["limitations"].append(
-                "No incident or alert was specified, and no matching evidence was bound to this query. "
-                "Recent tenant events were not used as a silent substitute."
+                f"Evidence for another or unknown host was excluded. Requested host: {state['target_hostname']}."
+            )
+        if not retrieved_events and not retrieved_alerts:
+            state["limitations"].append(
+                "No matching tenant-scoped alert, incident, or event record was found for the supplied identifiers/entities."
             )
 
-        # 2. Query RAG Knowledge Base Chunks
-        rag_chunks = RAGService.search_similar_chunks(db=db, query=state["query"], top_k=2, tenant_id=tenant_id)
+        # Knowledge RAG is separate from exact telemetry retrieval and cannot establish that an attack occurred.
+        rag_chunks = RAGService.search_similar_chunks(
+            db=db, query=state["query"], top_k=3, tenant_id=tenant_id
+        )
 
         state["retrieved_events"] = retrieved_events
         state["retrieved_alerts"] = retrieved_alerts
@@ -167,14 +251,40 @@ class AISocCopilotWorkflow:
 
     @classmethod
     def node_analysis_mitre(cls, state: InvestigationState) -> InvestigationState:
-        combined_text = state["query"] + " "
+        # Map only retrieved security telemetry/alert evidence. Analyst wording and
+        # knowledge documents must not create a technique candidate by themselves.
+        combined_text = ""
         for e in state["retrieved_events"]:
             combined_text += f"{e.get('process_name', '')} {e.get('command_line', '')} {e.get('raw_data', '')} "
         for a in state["retrieved_alerts"]:
             combined_text += f"{a.get('title', '')} {a.get('rule_name', '')} "
 
-        mitre_hypotheses = MitreService.map_evidence_to_mitre(combined_text)
+        mitre_hypotheses = MitreService.map_evidence_to_mitre(combined_text) if combined_text.strip() else []
+        event_refs = [f"cit_evt_{e['id'][-6:]}" for e in state["retrieved_events"]]
+        alert_refs = [f"cit_alt_{a['id'][-6:]}" for a in state["retrieved_alerts"]]
+        mitre_hypotheses = [{
+            "technique_id": item["technique_id"],
+            "technique_name": item["name"],
+            "tactic": item["tactic"],
+            "status": "candidate",
+            # Existing keyword matching is not calibrated; expose it only as a match score.
+            "confidence": None,
+            "match_score": item["confidence"],
+            "rationale": item["rationale"],
+            "evidence_refs": list(dict.fromkeys(alert_refs + event_refs)),
+            "requires_analyst_validation": True,
+            "data_version": item.get("data_version"),
+            "source": item.get("source"),
+        } for item in mitre_hypotheses]
         state["mitre_hypotheses"] = mitre_hypotheses
+        return state
+
+    @classmethod
+    def node_context_assembly(cls, state: InvestigationState) -> InvestigationState:
+        # Telemetry is untrusted data. Sanitize it before any provider sees the context.
+        for event in state["retrieved_events"]:
+            event["command_line"] = cls.sanitize_untrusted_input(event.get("command_line") or "")
+            event["raw_data"] = cls.sanitize_untrusted_input(event.get("raw_data") or "")
         return state
 
     @classmethod
@@ -196,7 +306,9 @@ class AISocCopilotWorkflow:
                 "source_id": a["id"],
                 "title": f"Alert: {a['title']}",
                 "snippet": f"{a.get('rule_name') or 'rule unknown'} on {a.get('asset_id') or 'unknown asset'}",
-                "relevance_score": 0.9,
+                "relevance_score": None,
+                "hostname": a.get("asset_id"),
+                "timestamp": a.get("created_at").isoformat() if a.get("created_at") else None,
             })
         for e in events:
             citations.append({
@@ -205,7 +317,9 @@ class AISocCopilotWorkflow:
                 "source_id": e["id"],
                 "title": f"Security Event: {e['event_type']} ({e['source']})",
                 "snippet": (e.get("raw_data") or f"Event ID {e['event_id']}")[:180],
-                "relevance_score": 0.95
+                "relevance_score": None,
+                "hostname": e.get("hostname"),
+                "timestamp": e.get("timestamp").isoformat() if e.get("timestamp") else None,
             })
         for ind in indicators:
             citations.append({
@@ -214,7 +328,7 @@ class AISocCopilotWorkflow:
                 "source_id": ind["id"],
                 "title": f"Indicator {ind['type']}: {ind['value']}",
                 "snippet": f"Lookup status/risk: {ind.get('risk_level', 'unknown')}",
-                "relevance_score": 0.7,
+                "relevance_score": None,
             })
         for r in rag_chunks:
             citations.append({
@@ -223,7 +337,9 @@ class AISocCopilotWorkflow:
                 "source_id": r["chunk_id"],
                 "title": f"Knowledge: {r['title']} - {r['section']}",
                 "snippet": r["content"][:180],
-                "relevance_score": r["relevance_score"]
+                "relevance_score": r["relevance_score"],
+                "source_ref": r.get("source_ref"),
+                "score_type": "cosine_similarity",
             })
 
         evidence_weak = not events and not alerts
@@ -258,8 +374,8 @@ class AISocCopilotWorkflow:
         if mitre:
             top_tech = mitre[0]
             findings.append(
-                f"Primary MITRE ATT&CK candidate (not confirmed): {top_tech['technique_id']} ({top_tech['name']}) "
-                f"under tactic {top_tech['tactic']} (Confidence: {top_tech['confidence']*100:.0f}%)."
+                f"Primary MITRE ATT&CK candidate (not confirmed): {top_tech['technique_id']} ({top_tech['technique_name']}) "
+                f"under tactic {top_tech['tactic']}; validate against the cited telemetry."
             )
 
         # Recommendations come from the retrieved source text, so an analyst can
@@ -283,18 +399,42 @@ class AISocCopilotWorkflow:
                     "priority": "high" if is_response else "medium",
                     "requires_approval": is_response,
                     "citation_id": f"cit_kb_{chunk['chunk_id'][-6:]}",
+                    "rationale": "This step appears in the retrieved knowledge source; confirm it applies to the observed endpoint and local policy.",
+                    "evidence_refs": [f"cit_kb_{chunk['chunk_id'][-6:]}"],
+                    "prerequisites": ["Analyst validates the target and local response policy."],
+                    "expected_outcome": "Documented investigative or response progress; this recommendation is not an executed action.",
+                    "status": "proposed",
                 })
                 if len(recommendations) >= 4:
                     break
             if len(recommendations) >= 4:
                 break
+        if not recommendations and events:
+            event_refs = [f"cit_evt_{e['id'][-6:]}" for e in events[:3]]
+            recommendations.append({
+                "category": "investigative",
+                "title": "Retrieve process ancestry and access details",
+                "description": "The stored event does not contain enough lineage/access context to validate the observed process behavior.",
+                "priority": "high",
+                "requires_approval": False,
+                "rationale": "The available event has a process observation but does not include verified parent-process or access-mask details.",
+                "evidence_refs": event_refs,
+                "prerequisites": ["Query the endpoint telemetry source for the same host and event time."],
+                "expected_outcome": "Confirm or refute the process relationship using endpoint records.",
+                "status": "proposed",
+            })
         if not recommendations:
             recommendations.append({
                 "category": "investigative",
                 "title": "Gather and validate incident-specific evidence",
                 "description": "No retrieved knowledge source contained an explicit response step. Confirm affected assets, process lineage, and indicator reputation before taking action.",
                 "priority": "medium",
-                "requires_approval": False
+                "requires_approval": False,
+                "rationale": "No direct security record was retrieved for this query.",
+                "evidence_refs": [],
+                "prerequisites": ["Supply an alert ID, incident ID, or exact hostname."],
+                "expected_outcome": "Retrieve tenant-scoped records before drawing an incident conclusion.",
+                "status": "proposed",
             })
 
         embedding_mode = VectorService.embedding_mode()
@@ -337,12 +477,91 @@ class AISocCopilotWorkflow:
         if evidence_weak:
             limitations.append("Evidence was weak or unavailable; confidence was lowered.")
 
-        evidence_points = min(len(events), 3) * 0.08 + min(len(alerts), 2) * 0.08
-        evidence_points += min(len(indicators), 2) * 0.05
-        evidence_points += 0.12 if rag_chunks else 0.0
-        confidence = round(min(0.92, 0.35 + evidence_points), 2)
-        if evidence_weak:
-            confidence = min(confidence, 0.28)
+        # This is a measurable field-coverage score, not a probability or vector score.
+        coverage_fields = ("hostname", "timestamp", "source", "event_type", "user", "process_name", "command_line")
+        expected = len(events) * len(coverage_fields)
+        present = sum(bool(event.get(field)) for event in events for field in coverage_fields)
+        confidence = round(present / expected, 2) if expected else 0.0
+        confidence_rationale = (
+            f"Structured telemetry field coverage: {present}/{expected} observed fields. "
+            "This is a completeness measure, not a probability of compromise; RAG similarity is excluded."
+        )
+        missing_data = []
+        if not alerts:
+            missing_data.append("No matching alert record was retrieved.")
+        if not events:
+            missing_data.append("No directly correlated event record was retrieved.")
+        if not any(e.get("hostname") for e in events):
+            missing_data.append("Affected hostname is unavailable in retrieved event telemetry.")
+        if not any(e.get("user") for e in events):
+            missing_data.append("Affected user is unavailable in retrieved event telemetry.")
+        if not any(e.get("parent_process_name") or e.get("parent_process_id") for e in events):
+            missing_data.append("Parent process/ancestry telemetry is unavailable.")
+        if not any(e.get("process_id") for e in events):
+            missing_data.append("Process ID telemetry is unavailable.")
+        if not rag_chunks:
+            missing_data.append("No tenant knowledge-base guidance matched this query.")
+
+        timeline = [{
+            "timestamp": e.get("timestamp").isoformat() if e.get("timestamp") else None,
+            "title": f"{e.get('event_type') or 'Security event'} on {e.get('hostname') or 'unknown host'}",
+            "event_type": e.get("event_type"),
+            "hostname": e.get("hostname"),
+            "user": e.get("user"),
+            "process_name": e.get("process_name"),
+            "command_line": e.get("command_line"),
+            "evidence_ref": f"cit_evt_{e['id'][-6:]}",
+        } for e in events]
+        finding_details = []
+        for index, alert in enumerate(alerts):
+            event_refs = [f"cit_evt_{event['id'][-6:]}" for event in events if event["id"] in alert.get("event_ids", [])]
+            refs = [f"cit_alt_{alert['id'][-6:]}"] + event_refs
+            finding_details.append({
+                "finding_id": f"finding_{index + 1:03d}",
+                "title": alert["title"],
+                "status": "suspected",
+                "severity": alert.get("severity"),
+                "description": alert.get("rule_name") or alert["title"],
+                "rationale": "A tenant-scoped alert record and only its host-validated linked events support this finding. Analyst validation is required.",
+                "evidence_refs": refs,
+                "missing_data": [value for value in missing_data if any(token in value.lower() for token in ("process", "parent", "user"))],
+            })
+        if not finding_details:
+            for index, event in enumerate(events):
+                finding_details.append({
+                    "finding_id": f"finding_{index + 1:03d}",
+                    "title": f"Observed {event['event_type']}",
+                    "status": "observed",
+                    "severity": event.get("severity"),
+                    "description": "This is a source event observation, not a confirmed malicious finding.",
+                    "rationale": "The record was retrieved by exact tenant and hostname filters.",
+                    "evidence_refs": [f"cit_evt_{event['id'][-6:]}"],
+                    "missing_data": [],
+                })
+
+        requested_host = state.get("target_hostname")
+        excluded = bool(state.get("excluded_evidence"))
+        status = "entity_mismatch" if excluded and not (events or alerts) else (
+            "needs_validation" if events or alerts else "no_evidence"
+        )
+        incident_context = dict(state.get("incident_context") or {})
+        if alerts and not incident_context.get("alert_id"):
+            primary_alert = alerts[0]
+            incident_context.update({
+                "alert_id": primary_alert["id"],
+                "incident_id": primary_alert.get("incident_id"),
+                "hostname": primary_alert.get("asset_id"),
+                "affected_user": primary_alert.get("affected_user"),
+                "severity": primary_alert.get("severity"),
+                "alert_status": primary_alert.get("status"),
+            })
+        incident_context.setdefault("hostname", requested_host or next((e.get("hostname") for e in events if e.get("hostname")), None))
+        state["finding_details"] = finding_details
+        state["timeline"] = timeline
+        state["missing_data"] = missing_data
+        state["confidence_rationale"] = confidence_rationale
+        state["status"] = status
+        state["incident_context"] = incident_context
 
         state["summary"] = summary
         state["findings"] = findings
@@ -367,6 +586,12 @@ class AISocCopilotWorkflow:
                 "llm_used": llm_used,
                 "llm_provider": llm_result.get("provider"),
                 "embedding_mode": embedding_mode,
+                "status": status,
+                "incident": incident_context,
+                "finding_details": finding_details,
+                "timeline": timeline,
+                "missing_data": missing_data,
+                "confidence_rationale": confidence_rationale,
             },
             cited_evidence=citations,
             mitre_mappings=mitre,
@@ -380,7 +605,9 @@ class AISocCopilotWorkflow:
 
     @classmethod
     def run_investigation(
-        cls, db: Session, query: str, user_id: str, tenant_id: str = "tenant_default", incident_id: Optional[str] = None, alert_id: Optional[str] = None
+        cls, db: Session, query: str, user_id: str, tenant_id: str = "tenant_default",
+        incident_id: Optional[str] = None, alert_id: Optional[str] = None,
+        indicator_value: Optional[str] = None,
     ) -> Dict[str, Any]:
         state: InvestigationState = {
             "query": query,
@@ -389,6 +616,16 @@ class AISocCopilotWorkflow:
             "incident_id": incident_id,
             "alert_id": alert_id,
             "indicator_value": None,
+            "target_hostname": None,
+            "target_user": None,
+            "incident_context": {},
+            "excluded_evidence": [],
+            "finding_details": [],
+            "timeline": [],
+            "missing_data": [],
+            "confidence_rationale": "",
+            "status": "no_evidence",
+            "investigation_id": "",
             "retrieved_events": [],
             "retrieved_alerts": [],
             "retrieved_indicators": [],
@@ -403,11 +640,20 @@ class AISocCopilotWorkflow:
             "error": None
         }
 
-        # Execute explicit state graph pipeline nodes
-        state = cls.node_query_understanding(state)
-        state = cls.node_evidence_retrieval(state, db=db)
-        state = cls.node_analysis_mitre(state)
-        state = cls.node_response_generation(state, db=db)
+        state["indicator_value"] = indicator_value
+        graph = StateGraph(InvestigationState)
+        graph.add_node("query_understanding", cls.node_query_understanding)
+        graph.add_node("structured_retrieval", lambda current: cls.node_evidence_retrieval(current, db=db))
+        graph.add_node("context_assembly", cls.node_context_assembly)
+        graph.add_node("mitre_candidates", cls.node_analysis_mitre)
+        graph.add_node("report_generation", lambda current: cls.node_response_generation(current, db=db))
+        graph.set_entry_point("query_understanding")
+        graph.add_edge("query_understanding", "structured_retrieval")
+        graph.add_edge("structured_retrieval", "context_assembly")
+        graph.add_edge("context_assembly", "mitre_candidates")
+        graph.add_edge("mitre_candidates", "report_generation")
+        graph.add_edge("report_generation", END)
+        state = graph.compile().invoke(state)
 
         return {
             "investigation_id": state.get("investigation_id") or "",
@@ -422,4 +668,16 @@ class AISocCopilotWorkflow:
             "llm_used": not any("No configured LLM provider was used" in x for x in state.get("limitations") or []),
             "embedding_mode": VectorService.embedding_mode(),
             "timestamp": datetime.now(timezone.utc)
+            ,"status": state["status"]
+            ,"incident": state["incident_context"]
+            ,"executive_summary": state["summary"]
+            ,"finding_details": state["finding_details"]
+            ,"timeline": state["timeline"]
+            ,"indicators": state["retrieved_indicators"]
+            ,"missing_data": state["missing_data"]
+            ,"confidence_rationale": state["confidence_rationale"]
+            ,"sources": [
+                {key: citation.get(key) for key in ("citation_id", "source_type", "source_id", "title", "source_ref", "score_type", "relevance_score")}
+                for citation in state["cited_evidence"]
+            ]
         }

@@ -27,7 +27,7 @@ def get_current_user(
             algorithms=[settings.ALGORITHM],
         )
         user_id: str = payload.get("sub")
-        if user_id is None:
+        if user_id is None or payload.get("purpose", "access") != "access":
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -35,6 +35,14 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
         raise credentials_exception
+    if payload.get("ver", 0) != (user.auth_token_version or 0):
+        raise credentials_exception
+    if not user.mfa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticator setup is required before using this account.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
